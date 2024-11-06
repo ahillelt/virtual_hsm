@@ -9,6 +9,7 @@
 
 #define MAX_FILENAME 256
 #define MAX_NAME_LENGTH 49
+#define MAX_STRING_INPUT 4096
 
 // Structure to hold parsed command line arguments
 typedef struct {
@@ -17,11 +18,18 @@ typedef struct {
     const char* provided_master_key;
     const char* command;
     const char* key_name;
-    const char* input_file;
-    const char* output_file;
-    const char* signature_file; 
-    const char* input_string;
-    int use_stdin;              // Flag to indicate if using stdin
+    
+    // Input handling
+    const char* input_file;     // File to read input from
+    const char* input_string;   // Direct string input
+    int use_stdin;             // Flag to indicate if using stdin
+    
+    // Output handling
+    const char* output_file;    // File to write output to
+    int use_stdout;            // Flag to indicate if using stdout (default)
+    
+    // Signature specific
+    const char* signature_file; // Signature file for verify operations
 } CommandLineArgs;
 
 // Function prototypes
@@ -30,7 +38,6 @@ void update_global_paths(const CommandLineArgs* args);
 int handle_arguments(int argc, char *argv[], CommandLineArgs* args);
 void print_usage(void);
 
-// Implementation of command line argument handling functions
 void init_command_line_args(CommandLineArgs* args) {
     memset(args->keystore_file, 0, MAX_FILENAME);
     memset(args->master_key_file, 0, MAX_FILENAME);
@@ -38,10 +45,11 @@ void init_command_line_args(CommandLineArgs* args) {
     args->command = NULL;
     args->key_name = NULL;
     args->input_file = NULL;
+    args->input_string = NULL;
     args->output_file = NULL;
     args->signature_file = NULL;
-    args->input_string = NULL;
     args->use_stdin = 0;
+    args->use_stdout = 1;  // Default to stdout
 }
 
 void print_usage(void) {
@@ -53,77 +61,48 @@ void print_usage(void) {
     fprintf(stderr, "  -master <file>        Specify custom master key file (default: master.key)\n");
     fprintf(stderr, "  -master_key <hex>     Provide master key directly as hex string\n\n");
     
+    fprintf(stderr, "Input/Output Options:\n");
+    fprintf(stderr, "  -i <file>             Read input from file\n");
+    fprintf(stderr, "  -is \"<string>\"        Provide input as string\n");
+    fprintf(stderr, "  -o <file>             Write output to file (default: stdout)\n\n");
+    
     fprintf(stderr, "Commands:\n");
     fprintf(stderr, "  Key Management:\n");
-    fprintf(stderr, "    -store <key_name>           Store a symmetric key (read hex from stdin)\n");
-    fprintf(stderr, "                                Example: echo \"0123456789abcdef\" | ./virtual_hsm -store mykey\n\n");
+    fprintf(stderr, "    -store <key_name>           Store a symmetric key\n");
+    fprintf(stderr, "                                Traditional: echo \"0123456789abcdef\" | ./virtual_hsm -store mykey\n");
+    fprintf(stderr, "                                New: ./virtual_hsm -store mykey -is \"0123456789abcdef\"\n");
+    fprintf(stderr, "                                     ./virtual_hsm -store mykey -i keyfile.txt\n\n");
     
     fprintf(stderr, "    -retrieve <key_name>        Retrieve a key's value in hex format\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -retrieve mykey\n\n");
+    fprintf(stderr, "                                Example: ./virtual_hsm -retrieve mykey -o output.txt\n\n");
     
     fprintf(stderr, "    -list                       List all stored key names\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -list\n\n");
+    fprintf(stderr, "                                Example: ./virtual_hsm -list -o keys.txt\n\n");
     
     fprintf(stderr, "  Master Key Operations:\n");
     fprintf(stderr, "    -generate_master_key        Generate a new master key\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -generate_master_key\n\n");
+    fprintf(stderr, "                                Example: ./virtual_hsm -generate_master_key -o master.key\n\n");
     
     fprintf(stderr, "  Asymmetric Key Operations:\n");
     fprintf(stderr, "    -generate_key_pair <name>   Generate ED25519 key pair\n");
-    fprintf(stderr, "                                Creates both <name> (private) and <name>_public\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -generate_key_pair signing_key\n\n");
+    fprintf(stderr, "                                Creates both <name> (private) and <name>_public\n\n");
     
-    fprintf(stderr, "    -sign <key_name>           Sign data using private key (data from stdin)\n");
-    fprintf(stderr, "                                IMPORTANT: The signature is output to stdout and must be\n");
-    fprintf(stderr, "                                saved to a file for later verification.\n");
-    fprintf(stderr, "                                Examples:\n");
-    fprintf(stderr, "                                  # Sign data and save signature:\n");
-    fprintf(stderr, "                                  echo -n \"hello\" | ./virtual_hsm -sign signing_key > signature.bin\n");
-    fprintf(stderr, "                                  # Sign a file and save signature:\n");
-    fprintf(stderr, "                                  cat file.txt | ./virtual_hsm -sign signing_key > signature.bin\n");
-    fprintf(stderr, "                                  # Without saving signature (NOT RECOMMENDED):\n");
-    fprintf(stderr, "                                  echo -n \"hello\" | ./virtual_hsm -sign signing_key\n\n");
+    fprintf(stderr, "    -sign <key_name>           Sign data using private key\n");
+    fprintf(stderr, "                                Traditional: echo -n \"hello\" | ./virtual_hsm -sign signing_key > signature.bin\n");
+    fprintf(stderr, "                                New: ./virtual_hsm -sign signing_key -i file.txt -o signature.bin\n");
+    fprintf(stderr, "                                     ./virtual_hsm -sign signing_key -is \"hello\" -o signature.bin\n\n");
     
-    fprintf(stderr, "    -verify <key_name>         Verify signature using either:\n");
-    fprintf(stderr, "                                1. Concatenated input via stdin:\n");
-    fprintf(stderr, "                                   cat file.txt signature.bin | ./virtual_hsm -verify signing_key_public\n");
-    fprintf(stderr, "                                   (echo -n \"hello\"; cat signature.bin) | ./virtual_hsm -verify signing_key_public\n\n");
-    fprintf(stderr, "                                2. Separate files:\n");
-    fprintf(stderr, "                                   ./virtual_hsm -verify signing_key_public -in data.txt -sig signature.bin\n\n");
-    
+    fprintf(stderr, "    -verify <key_name>         Verify signature\n");
+    fprintf(stderr, "                                Traditional: cat file.txt signature.bin | ./virtual_hsm -verify signing_key_public\n");
+    fprintf(stderr, "                                New: ./virtual_hsm -verify signing_key_public -i file.txt -s signature.bin\n");
+    fprintf(stderr, "                                     ./virtual_hsm -verify signing_key_public -is \"hello\" -s signature.bin\n\n");
     
     fprintf(stderr, "    -export_public_key <name>   Export public key in PEM format\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -export_public_key signing_key_public\n\n");
+    fprintf(stderr, "                                Example: ./virtual_hsm -export_public_key signing_key_public -o public.pem\n\n");
     
-    fprintf(stderr, "    -import_public_key <name>   Import public key from PEM format (read from stdin)\n");
-    fprintf(stderr, "                                Example: cat public.pem | ./virtual_hsm -import_public_key new_key\n\n");
-    
-    fprintf(stderr, "Notes:\n");
-    fprintf(stderr, "  - All keys are stored encrypted using the master key\n");
-    fprintf(stderr, "  - Public keys from key pairs are stored with '_public' suffix\n");
-    fprintf(stderr, "  - Max key name length is %d characters\n", MAX_NAME_LENGTH);
-    fprintf(stderr, "  - When signing data:\n");
-    fprintf(stderr, "    * The signature is output in binary format to stdout\n");
-    fprintf(stderr, "    * You MUST save the signature to verify it later (use > signature.bin)\n");
-    fprintf(stderr, "    * The signature file is required for verification\n");
-    fprintf(stderr, "  - When verifying:\n");
-    fprintf(stderr, "    * You must provide both the original data AND its signature\n");
-    fprintf(stderr, "    * The data must come first, followed by the signature\n");
-    fprintf(stderr, "    * Use cat to concatenate them together as shown in examples\n\n");
-    
-    fprintf(stderr, "Complete Example Workflow for Digital Signatures:\n");
-    fprintf(stderr, "  1. Generate a key pair:\n");
-    fprintf(stderr, "     ./virtual_hsm -generate_key_pair mykey\n\n");
-    
-    fprintf(stderr, "  2. Sign a file (MUST save the signature):\n");
-    fprintf(stderr, "     cat myfile.txt | ./virtual_hsm -sign mykey > signature.bin\n\n");
-    
-    fprintf(stderr, "  3. Verify the file with its signature:\n");
-    fprintf(stderr, "     cat myfile.txt signature.bin | ./virtual_hsm -verify mykey_public\n\n");
-    
-    fprintf(stderr, "  NOTE: Running just './virtual_hsm -sign mykey' without saving the signature\n");
-    fprintf(stderr, "        will output the binary signature to the terminal, making it unusable\n");
-    fprintf(stderr, "        for later verification. Always save signatures to a file!\n");
+    fprintf(stderr, "    -import_public_key <name>   Import public key from PEM format\n");
+    fprintf(stderr, "                                Traditional: cat public.pem | ./virtual_hsm -import_public_key new_key\n");
+    fprintf(stderr, "                                New: ./virtual_hsm -import_public_key new_key -i public.pem\n\n");
 }
 
 int handle_arguments(int argc, char *argv[], CommandLineArgs* args) {
@@ -165,25 +144,28 @@ int handle_arguments(int argc, char *argv[], CommandLineArgs* args) {
         i++;  // Move past the key name
     }
 
-    // Parse additional arguments for verify command
-    if (strcmp(args->command, "-verify") == 0) {
-        args->use_stdin = 1;  // Default to stdin unless files are specified
-        
-        // Parse remaining arguments for file inputs
-        for (i++; i < argc; i++) {
-            if (strcmp(argv[i], "-in") == 0 && i + 1 < argc) {
-                args->input_file = argv[++i];
-                args->use_stdin = 0;
-            } else if (strcmp(argv[i], "-sig") == 0 && i + 1 < argc) {
-                args->signature_file = argv[++i];
-                args->use_stdin = 0;
-            }
+    // Parse remaining arguments
+    for (; i < argc; i++) {
+        if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
+            args->input_file = argv[++i];
+            args->use_stdin = 0;
+        } else if (strcmp(argv[i], "-is") == 0 && i + 1 < argc) {
+            args->input_string = argv[++i];
+            args->use_stdin = 0;
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            args->output_file = argv[++i];
+            args->use_stdout = 0;
+        } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
+            args->signature_file = argv[++i];
         }
+    }
 
-        // Validate that if one file is specified, both must be
-        if ((args->input_file && !args->signature_file) || 
-            (!args->input_file && args->signature_file)) {
-            fprintf(stderr, "Error: Both -in and -sig must be specified when using file inputs\n");
+    // Handle verify command's special case for backward compatibility
+    if (strcmp(args->command, "-verify") == 0) {
+        if (!args->input_file && !args->input_string && !args->signature_file) {
+            args->use_stdin = 1;  // Default to stdin for backward compatibility
+        } else if (!args->signature_file) {
+            fprintf(stderr, "Error: Signature file (-s) required for verify command when using -i or -is\n");
             return 0;
         }
     }
