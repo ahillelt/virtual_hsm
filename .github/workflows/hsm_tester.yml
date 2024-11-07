@@ -254,21 +254,21 @@ jobs:
             echo "No additional DLLs are required to run this application." >> release_package/README.txt
 
           else
-            # Linux build configuration remains unchanged
-            ${{ matrix.cc }} -o ${{ matrix.output }} virtual_hsm.c \
+            # Linux build 
+            ${{ matrix.cc }} -o release_package/${{ matrix.output }} virtual_hsm.c \
               -static \
               -Wl,--no-export-dynamic \
               -Wl,-Bstatic \
-              -lcrypto -lssl -ldl -lpthread -lz \
+              -lcrypto -lssl \
+              -pthread \
+              -Wl,--whole-archive -lpthread -Wl,--no-whole-archive \
+              -ldl -lz \
               ${{ matrix.defines }} \
               -g -Wall -Wextra || {
                 echo "Compilation failed! Debug info:"
                 echo "Compiler: ${{ matrix.cc }}"
                 exit 1
               }
-            
-           # Copy the binary to release_package
-            cp "${{ matrix.output }}" release_package/
             
             # Create README in release_package
             echo "Virtual HSM Linux Build" > release_package/README.txt
@@ -278,8 +278,15 @@ jobs:
             echo "No additional runtime dependencies are required." >> release_package/README.txt
           fi
 
-          # Copy binary to root directory
-          cp "${{ matrix.output }}" "./"
+          # Create release archive
+          if [[ "${{ matrix.target }}" == windows-* ]]; then
+            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* && cd ..)
+          else
+            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* && cd ..)
+          fi
+
+          # Copy to root directory (only if files are different)
+          cp -f "release_package/${{ matrix.output }}" "./" || true
           
           # Create release archive with proper directory handling
           if [[ "${{ matrix.target }}" == windows-* ]]; then
