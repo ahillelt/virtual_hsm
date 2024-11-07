@@ -364,17 +364,36 @@ jobs:
           
           git push origin $TEMP_BRANCH -f
           
-      - name: Create Pull Request
-        env:
-          GH_TOKEN: ${{ github.token }}        
+      - name: Commit directly to main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          if command -v gh &> /dev/null; then
-            gh pr create --base main --head "build-${{ matrix.target }}-${GITHUB_SHA::8}" \
-              --title "Update binaries for ${{ matrix.target }}" \
-              --body "Automated PR to update binaries for ${{ matrix.target }}" || echo "PR creation failed or PR already exists"
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Fetch the latest main branch
+          git fetch origin main
+          git checkout main
+          
+          # Stage new files
+          git add -f "./${{ matrix.output }}"
+          if [[ "${{ matrix.target }}" == windows-* ]]; then
+            git add -f "release/${{ matrix.output }}_release.zip"
           else
-            echo "GitHub CLI not available, please create PR manually"
+            git add -f "release/${{ matrix.output }}_release.tar.gz"
           fi
+          
+          # Commit and push directly to main
+          git commit -m "Update binary and release artifacts for ${{ matrix.target }}" || {
+            echo "No changes to commit"
+            exit 0
+          }
+          
+          # Pull and rebase in case other jobs have pushed
+          git pull --rebase origin main
+          
+          # Push changes
+          git push origin main
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
