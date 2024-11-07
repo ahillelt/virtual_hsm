@@ -5,7 +5,11 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
+    
+permissions:
+  contents: write
+  pull-requests: write
+  
 env:
   SECRETS_TEST: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   ACTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -359,15 +363,15 @@ jobs:
           }
           
           git push origin $TEMP_BRANCH -f
-
+          
       - name: Create Pull Request
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}        
         run: |
           if command -v gh &> /dev/null; then
             gh pr create --base main --head "build-${{ matrix.target }}-${GITHUB_SHA::8}" \
               --title "Update binaries for ${{ matrix.target }}" \
-              --body "Automated PR to update binaries for ${{ matrix.target }}"
+              --body "Automated PR to update binaries for ${{ matrix.target }}" || echo "PR creation failed or PR already exists"
           else
             echo "GitHub CLI not available, please create PR manually"
           fi
