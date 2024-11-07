@@ -269,149 +269,85 @@ jobs:
             echo "No additional runtime dependencies are required." >> release_package/README.txt
           fi
 
-      - name: Verify binary and dependencies
-        run: |
-          if [ -f "release_package/${{ matrix.output }}" ]; then
-            echo "Binary exists. Checking properties:"
-            file release_package/${{ matrix.output }}
-            if [[ "${{ matrix.target }}" == windows-* ]]; then
-              echo "Windows binary dependencies:"
-              if [ "${{ matrix.target }}" = "windows-x86" ]; then
-                i686-w64-mingw32-objdump -p release_package/${{ matrix.output }} | grep "DLL" || echo "No DLL dependencies (static binary)"
-              else
-                x86_64-w64-mingw32-objdump -p release_package/${{ matrix.output }} | grep "DLL" || echo "No DLL dependencies (static binary)"
-              fi
-              echo "Package contents:"
-              ls -l release_package/
-            else
-              echo "Linux binary dependencies:"
-              ldd release_package/${{ matrix.output }} || echo "No shared library dependencies (static binary)"
-            fi
-            sha256sum release_package/${{ matrix.output }}
-          else
-            echo "Error: Binary not found!"
-            exit 1
-          fi
-
-      - name: Create release archive and copy files
-        run: |
-          # Create release directory if it doesn't exist
-          mkdir -p release
-          
-          # Copy binary to root and release directory
-          cp "release_package/${{ matrix.output }}" ./
+          # Explicitly copy binary to root directory
+          cp "release_package/${{ matrix.output }}" "./${{ matrix.output }}"
           
           # Create release archive
           cd release_package
           if [[ "${{ matrix.target }}" == windows-* ]]; then
-            zip -r "../release/${{ matrix.output }}_release.zip" *
+            zip "../release/${{ matrix.output }}_release.zip" ./*
           else
-            tar czf "../release/${{ matrix.output }}_release.tar.gz" *
+            tar czf "../release/${{ matrix.output }}_release.tar.gz" ./*
           fi
+          cd ..
 
-      - name: Prepare git for binary commit
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          # Create release directory if it doesn't exist
-          mkdir -p release
-
-      - name: Verify files before commit
-        run: |
-          echo "Checking binary existence:"
-          ls -l "${{ matrix.output }}" || echo "Binary not found in root"
-          echo "Checking release archive existence:"
+          # Verify file locations
+          echo "Verifying file locations:"
+          ls -l "./${{ matrix.output }}" || echo "Binary not found in root"
           if [[ "${{ matrix.target }}" == windows-* ]]; then
             ls -l "release/${{ matrix.output }}_release.zip" || echo "Release zip not found"
           else
             ls -l "release/${{ matrix.output }}_release.tar.gz" || echo "Release tar.gz not found"
           fi
 
-      - name: Commit and push binary with verification
+      - name: Prepare git for binary commit
         run: |
-          # Fetch latest changes
-          git fetch origin
-          
-          # Create and switch to a new temporary branch
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Stage and commit files
+        run: |
+          # Create temp branch
           TEMP_BRANCH="build-${{ matrix.target }}-${GITHUB_SHA::8}"
           git checkout -b $TEMP_BRANCH
           
-          # Verify binary exists before git operations
-          if [ ! -f "${{ matrix.output }}" ]; then
-            echo "Error: Binary ${{ matrix.output }} not found in root directory"
+          # Ensure binary exists in root and release archive exists
+          if [ ! -f "./${{ matrix.output }}" ]; then
+            echo "Error: Binary not found in root directory"
             exit 1
           fi
           
-          # Verify release archive exists
-          if [[ "${{ matrix.target }}" == windows-* ]]; then
-            if [ ! -f "release/${{ matrix.output }}_release.zip" ]; then
-              echo "Error: Release zip not found"
-              exit 1
-            fi
-          else
-            if [ ! -f "release/${{ matrix.output }}_release.tar.gz" ]; then
-              echo "Error: Release tar.gz not found"
-              exit 1
-            fi
-          fi
-          
-          # Add binary to git
-          git add -f "${{ matrix.output }}" || {
-            echo "Failed to add binary to git"
+          # Stage the binary from root directory
+          git add -f "./${{ matrix.output }}" || {
+            echo "Failed to add binary"
+            ls -la
             exit 1
           }
           
-          # Add release archive to git
+          # Stage the release archive
           if [[ "${{ matrix.target }}" == windows-* ]]; then
             git add -f "release/${{ matrix.output }}_release.zip" || {
-              echo "Failed to add release zip to git"
+              echo "Failed to add release zip"
+              ls -la release/
               exit 1
             }
           else
             git add -f "release/${{ matrix.output }}_release.tar.gz" || {
-              echo "Failed to add release tar.gz to git"
+              echo "Failed to add release tar.gz"
+              ls -la release/
               exit 1
             }
           fi
           
-          # Show status before commit
-          echo "Git status before commit:"
-          git status
-          
-          # Commit changes
+          # Commit and push
           git commit -m "Update binary and release artifacts for ${{ matrix.target }}" || {
-            echo "Git commit failed"
+            echo "Commit failed"
+            git status
             exit 1
           }
           
-          # Fetch again to ensure we have latest changes
-          git fetch origin main
-          
-          # Rebase onto main to incorporate any changes that happened during build
-          git rebase origin/main || {
-            echo "Rebase failed, attempting to resolve conflicts"
-            # If rebase fails, abort and try merge strategy
-            git rebase --abort
-            git merge origin/main --strategy-option theirs || {
-              echo "Both rebase and merge failed"
-              exit 1
-            }
-          }
-          
-          # Force push the temporary branch
-          git push origin $TEMP_BRANCH -f || {
-            echo "Failed to push temporary branch"
-            exit 1
-          }
-          
-          # Create a pull request using GitHub CLI if available, otherwise output instructions
+          git push origin $TEMP_BRANCH -f
+
+      - name: Create Pull Request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           if command -v gh &> /dev/null; then
-            gh pr create --base main --head $TEMP_BRANCH \
+            gh pr create --base main --head "build-${{ matrix.target }}-${GITHUB_SHA::8}" \
               --title "Update binaries for ${{ matrix.target }}" \
-              --body "Automated PR to update binaries for ${{ matrix.target }}" \
-              || echo "Failed to create PR automatically, please create manually"
+              --body "Automated PR to update binaries for ${{ matrix.target }}"
           else
-            echo "Please create a pull request from branch $TEMP_BRANCH to main"
+            echo "GitHub CLI not available, please create PR manually"
           fi
 
       - name: Upload artifacts
