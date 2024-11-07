@@ -202,6 +202,7 @@ jobs:
       - name: Compile for ${{ matrix.target }}
         run: |
           mkdir -p release_package
+          mkdir -p release
           
           if [[ "${{ matrix.target }}" == windows-* ]]; then
             # Windows build configuration
@@ -255,13 +256,21 @@ jobs:
           else
             # Linux build configuration remains unchanged
             ${{ matrix.cc }} -o ${{ matrix.output }} virtual_hsm.c \
-              -static -static-libgcc -static-libstdc++ \
-              -lcrypto -lssl \
+              -static \
+              -Wl,--no-export-dynamic \
+              -Wl,-Bstatic \
+              -lcrypto -lssl -ldl -lpthread -lz \
               ${{ matrix.defines }} \
-              -g -Wall -Wextra
+              -g -Wall -Wextra || {
+                echo "Compilation failed! Debug info:"
+                echo "Compiler: ${{ matrix.cc }}"
+                exit 1
+              }
             
-            cp ${{ matrix.output }} release_package/
+           # Copy the binary to release_package
+            cp "${{ matrix.output }}" release_package/
             
+            # Create README in release_package
             echo "Virtual HSM Linux Build" > release_package/README.txt
             echo "------------------------" >> release_package/README.txt
             echo "" >> release_package/README.txt
@@ -269,17 +278,23 @@ jobs:
             echo "No additional runtime dependencies are required." >> release_package/README.txt
           fi
 
-          # Explicitly copy binary to root directory
-          cp "release_package/${{ matrix.output }}" "./${{ matrix.output }}"
+          # Copy binary to root directory
+          cp "${{ matrix.output }}" "./"
           
-          # Create release archive
-          cd release_package
+          # Create release archive with proper directory handling
           if [[ "${{ matrix.target }}" == windows-* ]]; then
-            zip "../release/${{ matrix.output }}_release.zip" ./*
+            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* && cd ..)
           else
-            tar czf "../release/${{ matrix.output }}_release.tar.gz" ./*
+            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* && cd ..)
           fi
-          cd ..
+
+          # Debug output
+          echo "Contents of current directory:"
+          ls -la
+          echo "Contents of release directory:"
+          ls -la release/
+          echo "Contents of release_package directory:"
+          ls -la release_package/
 
           # Verify file locations
           echo "Verifying file locations:"
