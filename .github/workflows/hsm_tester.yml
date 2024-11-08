@@ -203,8 +203,9 @@ jobs:
           
           cd ..
 
-      - name: Compile for ${{ matrix.target }}
+    - name: Compile for ${{ matrix.target }}
         run: |
+          # Create directories
           mkdir -p release_package
           mkdir -p release
           
@@ -221,8 +222,8 @@ jobs:
             
             echo "Compiling with OpenSSL from: ${OPENSSL_DIR}"
             
-            # Static linking for Windows
-            ${{ matrix.cc }} -o ${{ matrix.output }} virtual_hsm.c \
+            # Compile directly into release_package directory
+            ${{ matrix.cc }} -o "release_package/${{ matrix.output }}" virtual_hsm.c \
               ${{ matrix.defines }} \
               -I. \
               -I${OPENSSL_DIR}/include \
@@ -241,10 +242,7 @@ jobs:
               -lkernel32 \
               -lbcrypt \
               -g -Wall -Wextra || {
-                echo "Compilation failed! Debug info:"
-                echo "Compiler: ${{ matrix.cc }}"
-                echo "OpenSSL lib directory contents:"
-                ls -l ${OPENSSL_DIR}/lib/
+                echo "Compilation failed!"
                 exit 1
               }
 
@@ -254,14 +252,16 @@ jobs:
             echo "" >> release_package/README.txt
             echo "This package contains the Virtual HSM executable built as a static binary." >> release_package/README.txt
             echo "No additional DLLs are required to run this application." >> release_package/README.txt
-            # Ensure binary is copied to both root and release_package
             
-            cp "${{ matrix.output }}" "./release_package/"
-            cp "${{ matrix.output }}" "./"
+            # Create release archive
+            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* ) || {
+              echo "Failed to create release archive"
+              exit 1
+            }
             
           else
-            # Linux compilation logic
-               ${{ matrix.cc }} -o "${{ matrix.output }}" virtual_hsm.c \
+            # Linux compilation
+            ${{ matrix.cc }} -o "release_package/${{ matrix.output }}" virtual_hsm.c \
               -static \
               -Wl,--no-export-dynamic \
               -Wl,-Bstatic \
@@ -270,98 +270,87 @@ jobs:
               -Wl,--whole-archive -lpthread -Wl,--no-whole-archive \
               -ldl -lz \
               ${{ matrix.defines }} \
-              -g -Wall -Wextra || exit 1
+              -g -Wall -Wextra || {
+                echo "Compilation failed!"
+                exit 1
+              }
             
-            # copy command with error checking
-            if [ -f "${{ matrix.output }}" ]; then
-              cp -f "${{ matrix.output }}" "./release_package/" || exit 1
-            else
-              echo "Error: Compilation failed - binary not found"
+            # Create release archive
+            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* ) || {
+              echo "Failed to create release archive"
               exit 1
-            fi
-          fi
-          
-          # Create release archive with error checking
-          if [[ "${{ matrix.target }}" == windows-* ]]; then
-            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* ) || exit 1
-          else
-            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* ) || exit 1
+            }
           fi
           
           # Verify files exist
-          if [ ! -f "./release_package/${{ matrix.output }}" ]; then
+          if [ ! -f "release_package/${{ matrix.output }}" ]; then
             echo "Error: Binary not found in release_package"
             exit 1
           fi
           
+          if [[ "${{ matrix.target }}" == windows-* ]]; then
+            if [ ! -f "release/${{ matrix.output }}_release.zip" ]; then
+              echo "Error: Release archive not found"
+              exit 1
+            fi
+          else
+            if [ ! -f "release/${{ matrix.output }}_release.tar.gz" ]; then
+              echo "Error: Release archive not found"
+              exit 1
+            fi
+          fi
+          
           # Debug output
-          echo "Contents of current directory:"
-          ls -la
-          echo "Contents of release directory:"
-          ls -la release/
           echo "Contents of release_package directory:"
           ls -la release_package/
+          echo "Contents of release directory:"
+          ls -la release/
 
       - name: Commit to main branch
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          # Configure git
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Verify binary exists before git operations
-          if [ ! -f "./${{ matrix.output }}" ]; then
-            echo "Error: Binary not found in root directory"
-            ls -la
-            exit 1
-          fi
-          
-          # Fetch and checkout main
           git fetch origin main
           git checkout main
           
-          # Ensure the binary is executable
-          chmod +x "./${{ matrix.output }}"
-          
-          # Stage files with verification
-          git add -f "./${{ matrix.output }}" || {
-            echo "Failed to add binary"
-            ls -la
-            exit 1
-          }
-          
-          if [[ "${{ matrix.target }}" == windows-* ]]; then
-            git add -f "release/${{ matrix.output }}_release.zip" || {
-              echo "Failed to add release zip"
-              ls -la release/
+          if [ -f "release_package/${{ matrix.output }}" ]; then
+            chmod +x "release_package/${{ matrix.output }}"
+            git add -f "release_package/${{ matrix.output }}" || {
+              echo "Failed to add binary"
               exit 1
             }
+            
+            if [[ "${{ matrix.target }}" == windows-* ]]; then
+              git add -f "release/${{ matrix.output }}_release.zip" || {
+                echo "Failed to add release zip"
+                exit 1
+              }
+            else
+              git add -f "release/${{ matrix.output }}_release.tar.gz" || {
+                echo "Failed to add release tar.gz"
+                exit 1
+              }
+            fi
+            
+            git commit -m "Update binary and release artifacts for ${{ matrix.target }}" || {
+              echo "No changes to commit"
+              exit 0
+            }
+            
+            git pull --rebase origin main
+            git push origin main
           else
-            git add -f "release/${{ matrix.output }}_release.tar.gz" || {
-              echo "Failed to add release tar.gz"
-              ls -la release/
-              exit 1
-            }
+            echo "Error: Binary not found for commit"
+            exit 1
           fi
-          
-          # Commit changes
-          git commit -m "Update binary and release artifacts for ${{ matrix.target }}" || {
-            echo "No changes to commit"
-            git status
-            exit 0
-          }
-          
-          # Pull and rebase in case other jobs have pushed
-          git pull --rebase origin main
-          
-          # Push changes
-          git push origin main
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.output }}_all_artifacts
           path: |
-            ./${{ matrix.output }}
+            ./release_package/${{ matrix.output }}
             ./release/${{ matrix.output }}_release.*
           if-no-files-found: error
