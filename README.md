@@ -285,3 +285,5 @@ This implementation is for educational purposes and lacks several security featu
 - Limited error handling for some operations
 - No protection against key overwriting
 - No built-in key rotation mechanism
+
+Additional in Code Comments suggested by Claude.ai for readability and approved by author
