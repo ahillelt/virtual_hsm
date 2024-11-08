@@ -261,7 +261,7 @@ jobs:
             
           else
             # Linux compilation logic
-            ${{ matrix.cc }} -o "${{ matrix.output }}" virtual_hsm.c \
+               ${{ matrix.cc }} -o "${{ matrix.output }}" virtual_hsm.c \
               -static \
               -Wl,--no-export-dynamic \
               -Wl,-Bstatic \
@@ -270,23 +270,29 @@ jobs:
               -Wl,--whole-archive -lpthread -Wl,--no-whole-archive \
               -ldl -lz \
               ${{ matrix.defines }} \
-              -g -Wall -Wextra
+              -g -Wall -Wextra || exit 1
             
-            # Ensure binary is copied to both root and release_package
-            cp "${{ matrix.output }}" "./release_package/"
-            cp "${{ matrix.output }}" "./"
+            # copy command with error checking
+            if [ -f "${{ matrix.output }}" ]; then
+              cp -f "${{ matrix.output }}" "./release_package/" || exit 1
+            else
+              echo "Error: Compilation failed - binary not found"
+              exit 1
+            fi
           fi
           
-          # Create release archive
+          # Create release archive with error checking
           if [[ "${{ matrix.target }}" == windows-* ]]; then
-            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* )
+            (cd release_package && zip "../release/${{ matrix.output }}_release.zip" ./* ) || exit 1
           else
-            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* )
+            (cd release_package && tar czf "../release/${{ matrix.output }}_release.tar.gz" ./* ) || exit 1
           fi
           
           # Verify files exist
-          ls -la "./${{ matrix.output }}" || { echo "Binary not found in root"; exit 1; }
-          ls -la "./release_package/${{ matrix.output }}" || { echo "Binary not found in release_package"; exit 1; }
+          if [ ! -f "./release_package/${{ matrix.output }}" ]; then
+            echo "Error: Binary not found in release_package"
+            exit 1
+          fi
           
           # Debug output
           echo "Contents of current directory:"
