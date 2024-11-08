@@ -187,7 +187,30 @@ int handle_verify_command(const CommandLineArgs* args) {
             fprintf(stderr, "Error: Invalid signature length or missing signature\n");
             return 0;
         }
-    } else {
+    } else if (args->input_string) {
+        // Handle input string
+        data_len = strlen(args->input_string);
+        if (data_len >= BUFFER_SIZE) {
+            fprintf(stderr, "Error: Input string too long\n");
+            return 0;
+        }
+        memcpy(data, args->input_string, data_len);
+        
+        // Read signature from signature file
+        FILE *sig_file = fopen(args->signature_file, "rb");
+        if (!sig_file) {
+            fprintf(stderr, "Error: Failed to open signature file '%s'\n", args->signature_file);
+            return 0;
+        }
+        
+        sig_len = fread(signature, 1, SIG_LENGTH, sig_file);
+        fclose(sig_file);
+        
+        if (sig_len != SIG_LENGTH) {
+            fprintf(stderr, "Error: Invalid signature length in file '%s'\n", args->signature_file);
+            return 0;
+        }
+    } else if (args->input_file) {
         // Read data from input file
         FILE *data_file = fopen(args->input_file, "rb");
         if (!data_file) {
@@ -217,6 +240,9 @@ int handle_verify_command(const CommandLineArgs* args) {
             fprintf(stderr, "Error: Invalid signature length in file '%s'\n", args->signature_file);
             return 0;
         }
+    } else {
+        fprintf(stderr, "Error: No input provided for verification\n");
+        return 0;
     }
     
     // Call verify_signature with all required parameters
