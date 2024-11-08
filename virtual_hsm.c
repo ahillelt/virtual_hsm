@@ -44,6 +44,7 @@ void update_global_paths(const CommandLineArgs* args) {
         master_key_file[MAX_FILENAME - 1] = '\0';
     }
 }
+
 int main(int argc, char *argv[]) {
     fprintf(stderr, "Debug: Starting virtual_hsm\n");
     
@@ -55,15 +56,15 @@ int main(int argc, char *argv[]) {
 
     update_global_paths(&args);
 
-    load_master_key(args.provided_master_key);
-    load_keystore();
-
+    // Handle generate_master_key command before trying to load the master key
     if (strcmp(args.command, "-generate_master_key") == 0) {
         generate_master_key();
         return 0;
     }
 
-
+    // For all other commands, we need the master key
+    load_master_key(args.provided_master_key);
+    load_keystore();
 
     if (strcmp(args.command, "-store") == 0) {
         char hex_key[KEY_SIZE * 2 + 1];
