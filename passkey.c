@@ -10,9 +10,6 @@
 #include <json-c/json.h>
 #include <limits.h>
 
-
-#include <fido/err.h>
-
 #define MAX_DEVICES 8
 #define RPID "nyu.edu"
 #define USER_ID "ah5647"
@@ -26,8 +23,6 @@
 static int debug_enabled = 0;
 #define DEBUG_PRINT(...) do { if (debug_enabled) printf(__VA_ARGS__); } while (0)
 
-
-// Structure to store credential information
 typedef struct {
     unsigned char *id;
     size_t id_len;
@@ -35,7 +30,6 @@ typedef struct {
     char *rpid;
 } credential_info_t;
 
-// Function prototypes
 char* get_pin(void);
 int ensure_storage_dir(void);
 int save_credential(const unsigned char *cred_id, size_t cred_len, const char *name);
@@ -44,7 +38,6 @@ void check_device_capabilities(fido_dev_t *dev);
 int generate_passkey(fido_dev_t *dev, const char *name);
 int authenticate_credential(fido_dev_t *dev, const char *name);
 
-// Implementation of get_pin()
 char* get_pin(void) {
     struct termios old_term, new_term;
     char* pin = malloc(MAX_PIN_LENGTH);
@@ -73,7 +66,6 @@ char* get_pin(void) {
     return pin;
 }
 
-// Ensure the storage directory exists
 int ensure_storage_dir(void) {
     char *home = getenv("HOME");
     if (!home) {
@@ -95,7 +87,6 @@ int ensure_storage_dir(void) {
     return 0;
 }
 
-// Save credential information to JSON file
 int save_credential(const unsigned char *cred_id, size_t cred_len, const char *name) {
     if (ensure_storage_dir() != 0) {
         return -1;
@@ -107,12 +98,10 @@ int save_credential(const unsigned char *cred_id, size_t cred_len, const char *n
     char file_path[PATH_MAX];
     snprintf(file_path, sizeof(file_path), "%s/%s/%s", home, STORAGE_DIR, CRED_FILE);
 
-    // Create JSON object
     json_object *root = NULL;
     json_object *cred_obj = json_object_new_object();
     if (!cred_obj) return -1;
 
-    // Convert credential ID to base64
     char *b64_cred = malloc(cred_len * 2);
     if (!b64_cred) {
         json_object_put(cred_obj);
@@ -127,7 +116,6 @@ int save_credential(const unsigned char *cred_id, size_t cred_len, const char *n
     json_object_object_add(cred_obj, "rpid", json_object_new_string(RPID));
     free(b64_cred);
 
-    // Load existing file if it exists
     struct stat st = {0};
     if (stat(file_path, &st) != -1) {
         json_object *existing = json_object_from_file(file_path);
@@ -144,7 +132,6 @@ int save_credential(const unsigned char *cred_id, size_t cred_len, const char *n
 
     json_object_object_add(root, name, cred_obj);
 
-    // Save to file
     if (json_object_to_file(file_path, root) != 0) {
         json_object_put(root);
         return -1;
@@ -154,7 +141,6 @@ int save_credential(const unsigned char *cred_id, size_t cred_len, const char *n
     return 0;
 }
 
-// Load credential information from JSON file
 credential_info_t *load_credential(const char *name) {
     char *home = getenv("HOME");
     if (!home) return NULL;
@@ -196,7 +182,6 @@ credential_info_t *load_credential(const char *name) {
         return NULL;
     }
 
-    // Convert hex string back to bytes
     for (size_t i = 0; i < cred->id_len; i++) {
         sscanf(&hex_id[i*2], "%2hhx", &cred->id[i]);
     }
@@ -208,19 +193,14 @@ credential_info_t *load_credential(const char *name) {
     return cred;
 }
 
-// Check device capabilities
 void check_device_capabilities(fido_dev_t *dev) {
     if (!dev) return;
 
     DEBUG_PRINT("Device capabilities:\n");
-    DEBUG_PRINT("  FIDO2 Support: %s\n", 
-        fido_dev_is_fido2(dev) ? "Yes" : "No");
-    DEBUG_PRINT("  PIN Support: %s\n",
-        fido_dev_has_pin(dev) ? "Yes" : "No");
+    DEBUG_PRINT("  FIDO2 Support: %s\n", fido_dev_is_fido2(dev) ? "Yes" : "No");
+    DEBUG_PRINT("  PIN Support: %s\n", fido_dev_has_pin(dev) ? "Yes" : "No");
 }
 
-
-// Generate a new passkey
 int generate_passkey(fido_dev_t *dev, const char *name) {
     int ret = -1;
     fido_cred_t *cred = NULL;
@@ -231,7 +211,6 @@ int generate_passkey(fido_dev_t *dev, const char *name) {
     size_t cred_len;
     int err;
 
-    // Generate random challenge using system random
     FILE *urandom = fopen("/dev/urandom", "rb");
     if (!urandom || fread(cdh, 1, sizeof(cdh), urandom) != sizeof(cdh)) {
         DEBUG_PRINT("Failed to generate challenge\n");
@@ -240,14 +219,12 @@ int generate_passkey(fido_dev_t *dev, const char *name) {
     }
     fclose(urandom);
 
-    // Create credential object
     cred = fido_cred_new();
     if (!cred) {
         DEBUG_PRINT("Failed to create credential\n");
         goto cleanup;
     }
 
-    // Set credential parameters
     if ((err = fido_cred_set_type(cred, COSE_ES256)) != FIDO_OK) {
         DEBUG_PRINT("Failed to set credential type: %s\n", fido_strerr(err));
         goto cleanup;
@@ -268,7 +245,6 @@ int generate_passkey(fido_dev_t *dev, const char *name) {
         goto cleanup;
     }
 
-    // Get PIN if device supports it
     if (fido_dev_has_pin(dev)) {
         pin = get_pin();
         if (!pin) {
@@ -277,17 +253,15 @@ int generate_passkey(fido_dev_t *dev, const char *name) {
         }
     }
 
-    // Make credential
+    printf("Please touch your YubiKey to complete registration...\n");
     if ((err = fido_dev_make_cred(dev, cred, pin)) != FIDO_OK) {
         DEBUG_PRINT("Failed to make credential: %s\n", fido_strerr(err));
         goto cleanup;
     }
 
-    // Get credential ID
     cred_id = fido_cred_id_ptr(cred);
     cred_len = fido_cred_id_len(cred);
 
-    // Save credential
     if (save_credential(cred_id, cred_len, name) != 0) {
         DEBUG_PRINT("Failed to save credential\n");
         goto cleanup;
@@ -305,7 +279,6 @@ cleanup:
     return ret;
 }
 
-// Authenticate using stored passkey
 int authenticate_credential(fido_dev_t *dev, const char *name) {
     int ret = -1;
     fido_assert_t *assert = NULL;
@@ -314,14 +287,12 @@ int authenticate_credential(fido_dev_t *dev, const char *name) {
     credential_info_t *cred = NULL;
     int err;
 
-    // Load credential
     cred = load_credential(name);
     if (!cred) {
-        DEBUG_PRINT("Failed to load credential\n");
-        goto cleanup;
+        printf("Error: Credential with name '%s' not found. Cannot continue authentication.\n", name);
+        return ret;
     }
 
-    // Generate random challenge using system random
     FILE *urandom = fopen("/dev/urandom", "rb");
     if (!urandom || fread(cdh, 1, sizeof(cdh), urandom) != sizeof(cdh)) {
         DEBUG_PRINT("Failed to generate challenge\n");
@@ -330,14 +301,12 @@ int authenticate_credential(fido_dev_t *dev, const char *name) {
     }
     fclose(urandom);
 
-    // Create assertion object
     assert = fido_assert_new();
     if (!assert) {
         DEBUG_PRINT("Failed to create assertion\n");
         goto cleanup;
     }
 
-    // Set assertion parameters
     if ((err = fido_assert_set_rp(assert, cred->rpid)) != FIDO_OK) {
         DEBUG_PRINT("Failed to set relying party ID: %s\n", fido_strerr(err));
         goto cleanup;
@@ -353,7 +322,6 @@ int authenticate_credential(fido_dev_t *dev, const char *name) {
         goto cleanup;
     }
 
-    // Get PIN if device supports it
     if (fido_dev_has_pin(dev)) {
         pin = get_pin();
         if (!pin) {
@@ -362,7 +330,7 @@ int authenticate_credential(fido_dev_t *dev, const char *name) {
         }
     }
 
-    // Get assertion
+    printf("Please touch your YubiKey to authenticate...\n");
     if ((err = fido_dev_get_assert(dev, assert, pin)) != FIDO_OK) {
         DEBUG_PRINT("Failed to get assertion: %s\n", fido_strerr(err));
         goto cleanup;
@@ -386,7 +354,6 @@ cleanup:
     return ret;
 }
 
-
 void print_usage(const char *program_name) {
     printf("Usage:\n");
     printf("  Generate and store a new passkey:\n");
@@ -403,7 +370,6 @@ int main(int argc, char *argv[]) {
     char *command = NULL;
     char *name = NULL;
 
-    // Parse command line arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0) {
             debug_enabled = 1;
@@ -421,7 +387,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Initialize the FIDO2 library
     fido_init(debug_enabled ? FIDO_DEBUG : 0);
 
     dev = fido_dev_new();
