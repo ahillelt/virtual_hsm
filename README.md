@@ -38,6 +38,10 @@ This virtual HSM is relatively simple and is not meant to be a true HSM, there i
 - Includes comprehensive error handling and debug output to learn more about HSM internals
 - Supports both file-based and stdin/stdout operations
 
+  **Work In Progress Components**
+  - FIDO2 support with Yubikey
+  - Tokenization of input data (encrypt/decrypt via retrieve) and secure storage
+
 ## Operation Notes
 
 Upon execution, the program generates two files:
