@@ -9,25 +9,46 @@
 #include <sys/stat.h>
 #include <uuid/uuid.h>
 #include <errno.h>
-#include <unistd.h>  // Added for access() and F_OK
+#include <unistd.h>
+#include <libgen.h>
 
+// Existing definitions
 #define BUFFER_SIZE 4096
 #define IV_SIZE 16
 #define KEY_SIZE 32
-#define TOKEN_SIZE 37  // UUID string length (36) + null terminator
-#define HASH_SIZE (SHA256_DIGEST_LENGTH * 2 + 1)  // Hex string length + null terminator
+#define TOKEN_SIZE 37
+#define HASH_SIZE (SHA256_DIGEST_LENGTH * 2 + 1)
 #define STORAGE_PATH "./secure_storage/"
 #define KEY_FILE_PATH "./secure_storage/master.key"
 
-// Structure to store metadata - moved to the top before any function declarations
+// New definitions for chunking
+#define MIN_CHUNK_SIZE (5 * 1024 * 1024)  // 5MB
+#define MAX_CHUNK_SIZE (10 * 1024 * 1024) // 10MB
+#define MAX_CHUNKS 1000                    // Maximum number of chunks per file
+
+
+
+// Add encrypted metadata magic number for validation
+#define METADATA_MAGIC 0x4D455441  // "META" in hex
+
+
 typedef struct {
     char token[TOKEN_SIZE];
     size_t data_size;
     unsigned char iv[IV_SIZE];
     char original_filename[256];
+    size_t chunk_count;
+    char chunk_hashes[MAX_CHUNKS][HASH_SIZE];
+    size_t chunk_sizes[MAX_CHUNKS];
 } Metadata;
 
-// Function Header Declarations
+// Add encrypted metadata header structure
+typedef struct {
+    uint32_t magic;          // Magic number for validation
+    size_t metadata_size;    // Size of the encrypted metadata
+    unsigned char iv[IV_SIZE]; // IV for metadata encryption
+} MetadataHeader;
+
 void bytes_to_hex(const unsigned char* bytes, size_t len, char* hex);
 void hash_token(const char* token, char* hashed_filename);
 int save_key(const unsigned char* key);
@@ -36,20 +57,20 @@ char* generate_token(void);
 int initialize_key(unsigned char* key);
 void print_file_info(const char* filepath);
 
-// File handling declarations
 char* handle_file_conflict(const char* output_dir, const char* original_filename);
-int handle_store_file(const char* input_path, char** output_path, const char* token, size_t* file_size);
+int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, const unsigned char* iv);
 
-// Encryption/Decryption declarations
-int encrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, unsigned char* iv);
-int encrypt_file(const char* input_path, const char* output_path, unsigned char* key, unsigned char* iv);
-int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, unsigned char* iv);
-int decrypt_file(const char* input_path, const char* output_dir, unsigned char* key, unsigned char* iv, const Metadata* metadata);
+// chunking
+size_t generate_chunk_size(void);
+int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk_count,const char* token, size_t* file_size, Metadata* metadata);
+int encrypt_file_chunked(const char* input_path, char** chunk_paths, size_t chunk_count,unsigned char* key, Metadata* metadata);
+int decrypt_file_chunked(const char* output_dir, unsigned char* key, const Metadata* metadata);
 
-// Metadata handling declarations
+// Metadata
+int encrypt_metadata(const Metadata* metadata, const unsigned char* key, const char* filepath);
+int decrypt_metadata(const char* filepath, const unsigned char* key, Metadata* metadata);
 int save_metadata(const Metadata* metadata);
 int load_metadata(const char* token, Metadata* metadata);
-
 
 
 // Function to convert bytes to hex string
@@ -60,47 +81,6 @@ void bytes_to_hex(const unsigned char* bytes, size_t len, char* hex) {
     hex[len * 2] = '\0';
 }
 
-// store handling function
-int handle_store_file(const char* input_path, char** output_path, const char* token, size_t* file_size) {
-    struct stat st;
-    if (stat(input_path, &st) == -1) {
-        printf("Error: Input file does not exist\n");
-        return -1;
-    }
-
-    // Store file size
-    *file_size = st.st_size;
-
-    // Get and display file information
-    printf("\nProcessing file: %s\n", input_path);
-    printf("Original file information:\n");
-    print_file_info(input_path);
-    
-    // Create storage directory if it doesn't exist
-    mkdir(STORAGE_PATH, 0700);
-    
-    // Generate hashed filename
-    char hashed_filename[HASH_SIZE];
-    hash_token(token, hashed_filename);
-    
-    // Allocate and create output path
-    *output_path = malloc(512);
-    if (!*output_path) {
-        printf("Error: Memory allocation failed\n");
-        return -1;
-    }
-    snprintf(*output_path, 512, "%s%s.enc", STORAGE_PATH, hashed_filename);
-
-    printf("\nStarting encryption process...\n");
-    printf("File size: %zu bytes\n", *file_size);
-    printf("This may take a while for larger files.\n");
-    printf("Target encrypted file: %s\n", *output_path);
-
-    return 0;
-}
-
-
-
 // Function to hash token into filename
 void hash_token(const char* token, char* hashed_filename) {
     EVP_MD_CTX *mdctx;
@@ -108,14 +88,12 @@ void hash_token(const char* token, char* hashed_filename) {
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hash_len;
 
-    // Create new message digest context
     mdctx = EVP_MD_CTX_new();
     if (mdctx == NULL) {
         printf("Error creating message digest context\n");
         return;
     }
 
-    // Initialize with SHA256 algorithm
     md = EVP_sha256();
     if (EVP_DigestInit_ex(mdctx, md, NULL) != 1) {
         printf("Error initializing digest\n");
@@ -123,24 +101,19 @@ void hash_token(const char* token, char* hashed_filename) {
         return;
     }
 
-    // Update with input token
     if (EVP_DigestUpdate(mdctx, token, strlen(token)) != 1) {
         printf("Error updating digest\n");
         EVP_MD_CTX_free(mdctx);
         return;
     }
 
-    // Finalize hash
     if (EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
         printf("Error finalizing digest\n");
         EVP_MD_CTX_free(mdctx);
         return;
     }
 
-    // Convert hash to hex string
     bytes_to_hex(hash, hash_len, hashed_filename);
-
-    // Clean up
     EVP_MD_CTX_free(mdctx);
 }
 
@@ -184,10 +157,8 @@ char* generate_token(void) {
 int initialize_key(unsigned char* key) {
     struct stat st;
     if (stat(KEY_FILE_PATH, &st) == 0) {
-        // Key file exists, load it
         return load_key(key);
     } else {
-        // Generate new key and save it
         if (RAND_bytes(key, KEY_SIZE) != 1) {
             return -1;
         }
@@ -195,116 +166,261 @@ int initialize_key(unsigned char* key) {
     }
 }
 
-// Encrypt file
-int encrypt_file(const char* input_path, const char* output_path, 
-                unsigned char* key, unsigned char* iv) {
-    FILE *ifp, *ofp;
-    EVP_CIPHER_CTX *ctx;
-    unsigned char buffer_in[BUFFER_SIZE];
-    unsigned char buffer_out[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
-    int bytes_read, out_len;
-    int ret = 0;
+// Print file information
+void print_file_info(const char* filepath) {
+    struct stat st;
+    if (stat(filepath, &st) == 0) {
+        char time_str[100];
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));
+        printf("Size: %ld bytes\n", st.st_size);
+        printf("Last modified: %s\n", time_str);
+    }
+}
 
-    // Open input file
-    ifp = fopen(input_path, "rb");
-    if (!ifp) {
-        printf("Error opening input file: %s\n", strerror(errno));
+///// 
+int encrypt_metadata(const Metadata* metadata, const unsigned char* key, const char* filepath) {
+    FILE* fp = fopen(filepath, "wb");
+    if (!fp) {
+        printf("Error opening metadata file: %s\n", strerror(errno));
         return -1;
     }
 
-    // Open output file
-    ofp = fopen(output_path, "wb");
-    if (!ofp) {
-        printf("Error opening output file: %s\n", strerror(errno));
-        fclose(ifp);
+    // Create and write header
+    MetadataHeader header;
+    header.magic = METADATA_MAGIC;
+    header.metadata_size = sizeof(Metadata);
+    if (RAND_bytes(header.iv, IV_SIZE) != 1) {
+        printf("Error generating IV for metadata\n");
+        fclose(fp);
         return -1;
     }
 
-    // Generate random IV
-    if (RAND_bytes(iv, IV_SIZE) != 1) {
-        fclose(ifp);
-        fclose(ofp);
-        return -1;
-    }
-
-    // Write IV at the beginning of the output file
-    if (fwrite(iv, 1, IV_SIZE, ofp) != IV_SIZE) {
-        fclose(ifp);
-        fclose(ofp);
+    if (fwrite(&header, sizeof(MetadataHeader), 1, fp) != 1) {
+        printf("Error writing metadata header\n");
+        fclose(fp);
         return -1;
     }
 
     // Initialize encryption context
-    ctx = EVP_CIPHER_CTX_new();
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
-        fclose(ifp);
-        fclose(ofp);
+        fclose(fp);
         return -1;
     }
 
-    // Initialize encryption operation
-    if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv)) {
+    if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, header.iv)) {
         EVP_CIPHER_CTX_free(ctx);
-        fclose(ifp);
-        fclose(ofp);
+        fclose(fp);
         return -1;
     }
 
-    // Encrypt file content
-    while ((bytes_read = fread(buffer_in, 1, BUFFER_SIZE, ifp)) > 0) {
-        if (!EVP_EncryptUpdate(ctx, buffer_out, &out_len, buffer_in, bytes_read)) {
-            ret = -1;
-            break;
-        }
-        if (fwrite(buffer_out, 1, out_len, ofp) != (size_t)out_len) {
-            ret = -1;
-            break;
+    // Encrypt metadata
+    int out_len;
+    unsigned char* buffer_out = malloc(sizeof(Metadata) + EVP_MAX_BLOCK_LENGTH);
+    if (!buffer_out) {
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
+    }
+
+    if (!EVP_EncryptUpdate(ctx, buffer_out, &out_len, (unsigned char*)metadata, sizeof(Metadata))) {
+        free(buffer_out);
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
+    }
+
+    if (fwrite(buffer_out, 1, out_len, fp) != (size_t)out_len) {
+        free(buffer_out);
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
+    }
+
+    int final_len;
+    if (!EVP_EncryptFinal_ex(ctx, buffer_out + out_len, &final_len)) {
+        free(buffer_out);
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
+    }
+
+    if (final_len > 0) {
+        if (fwrite(buffer_out + out_len, 1, final_len, fp) != (size_t)final_len) {
+            free(buffer_out);
+            EVP_CIPHER_CTX_free(ctx);
+            fclose(fp);
+            return -1;
         }
     }
 
-    if (ret == 0) {
-        // Finalize encryption
-        if (EVP_EncryptFinal_ex(ctx, buffer_out, &out_len)) {
-            if (fwrite(buffer_out, 1, out_len, ofp) != (size_t)out_len) {
-                ret = -1;
-            }
-        } else {
-            ret = -1;
-        }
-
-        // Get and write the tag
-        unsigned char tag[16];
-        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag)) {
-            if (fwrite(tag, 1, 16, ofp) != 16) {
-                ret = -1;
-            }
-        } else {
-            ret = -1;
-        }
+    // Write authentication tag
+    unsigned char tag[16];
+    if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag)) {
+        free(buffer_out);
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
     }
 
-    // Cleanup
+    if (fwrite(tag, 1, 16, fp) != 16) {
+        free(buffer_out);
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(fp);
+        return -1;
+    }
+
+    free(buffer_out);
     EVP_CIPHER_CTX_free(ctx);
-    fclose(ifp);
-    fclose(ofp);
-    
-    return ret;
+    fclose(fp);
+    return 0;
 }
 
-// Handle file path and name conflicts
+int decrypt_metadata(const char* filepath, const unsigned char* key, Metadata* metadata) {
+    FILE* fp = fopen(filepath, "rb");
+    if (!fp) {
+        printf("Error opening metadata file: %s\n", strerror(errno));
+        return -1;
+    }
+
+    // Read and verify header
+    MetadataHeader header;
+    if (fread(&header, sizeof(MetadataHeader), 1, fp) != 1) {
+        printf("Error reading metadata header\n");
+        fclose(fp);
+        return -1;
+    }
+
+    if (header.magic != METADATA_MAGIC) {
+        printf("Invalid metadata file format\n");
+        fclose(fp);
+        return -1;
+    }
+
+    // Read encrypted data
+    unsigned char* encrypted_data = malloc(header.metadata_size + 16);  // +16 for tag
+    if (!encrypted_data) {
+        fclose(fp);
+        return -1;
+    }
+
+    size_t read_size = fread(encrypted_data, 1, header.metadata_size, fp);
+    if (read_size != header.metadata_size) {
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    // Read authentication tag
+    unsigned char tag[16];
+    if (fread(tag, 1, 16, fp) != 16) {
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    // Initialize decryption context
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, header.iv)) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    // Decrypt metadata
+    int out_len;
+    if (!EVP_DecryptUpdate(ctx, (unsigned char*)metadata, &out_len, encrypted_data, header.metadata_size)) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    // Set expected tag value
+    if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag)) {
+        EVP_CIPHER_CTX_free(ctx);
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    // Verify and finalize decryption
+    int final_len;
+    if (!EVP_DecryptFinal_ex(ctx, (unsigned char*)metadata + out_len, &final_len)) {
+        printf("Error: Metadata authentication failed\n");
+        EVP_CIPHER_CTX_free(ctx);
+        free(encrypted_data);
+        fclose(fp);
+        return -1;
+    }
+
+    EVP_CIPHER_CTX_free(ctx);
+    free(encrypted_data);
+    fclose(fp);
+    return 0;
+}
+
+// Modified save_metadata function
+int save_metadata(const Metadata* metadata) {
+    char hashed_filename[HASH_SIZE];
+    hash_token(metadata->token, hashed_filename);
+    
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s%s.meta", STORAGE_PATH, hashed_filename);
+    
+    unsigned char key[KEY_SIZE];
+    if (load_key(key) != 0) {
+        printf("Error loading key for metadata encryption\n");
+        return -1;
+    }
+    
+    return encrypt_metadata(metadata, key, filepath);
+}
+
+// Modified load_metadata function
+int load_metadata(const char* token, Metadata* metadata) {
+    char hashed_filename[HASH_SIZE];
+    hash_token(token, hashed_filename);
+    
+    char filepath[512];
+    snprintf(filepath, sizeof(filepath), "%s%s.meta", STORAGE_PATH, hashed_filename);
+    
+    unsigned char key[KEY_SIZE];
+    if (load_key(key) != 0) {
+        printf("Error loading key for metadata decryption\n");
+        return -1;
+    }
+    
+    return decrypt_metadata(filepath, key, metadata);
+}
+
+// Handle file conflicts
 char* handle_file_conflict(const char* output_dir, const char* original_filename) {
     static char final_path[512];
     const char* base_filename = strrchr(original_filename, '/');
-    if (base_filename == NULL) {
-        base_filename = original_filename;
-    } else {
-        base_filename++; // Skip the '/' character
-    }
+    base_filename = (base_filename == NULL) ? original_filename : base_filename + 1;
 
-    // Construct initial output filepath
     snprintf(final_path, sizeof(final_path), "%s/%s", output_dir, base_filename);
 
-    // Check if file exists
+    // Create the output directory if it doesn't exist
+    char* output_dir_path = strdup(output_dir);
+    char* dir = dirname(output_dir_path);
+    if (access(dir, F_OK) != 0) {
+        if (mkdir(dir, 0755) != 0) {
+            printf("Error creating output directory: %s\n", strerror(errno));
+            free(output_dir_path);
+            return NULL;
+        }
+    }
+    free(output_dir_path);
+
     if (access(final_path, F_OK) != -1) {
         printf("\nFile already exists: %s\n", final_path);
         printf("Existing file information:\n");
@@ -315,22 +431,19 @@ char* handle_file_conflict(const char* output_dir, const char* original_filename
         printf("2) Enter new filename\n");
         printf("Choice (1 or 2): ");
         
-        char choice[8];  // Increased buffer size
+        char choice[8];
         if (fgets(choice, sizeof(choice), stdin) != NULL) {
-            choice[strcspn(choice, "\n")] = 0;  // Remove newline
+            choice[strcspn(choice, "\n")] = 0;
             
             if (strcmp(choice, "2") == 0) {
                 char new_filename[256];
                 printf("Enter new filename: ");
                 if (fgets(new_filename, sizeof(new_filename), stdin) != NULL) {
-                    // Remove newline if present
                     new_filename[strcspn(new_filename, "\n")] = 0;
-                    
-                    // Create new path with the new filename
                     snprintf(final_path, sizeof(final_path), "%s/%s", output_dir, new_filename);
                 }
             } else if (strcmp(choice, "1") != 0) {
-                return NULL;  // Invalid choice
+                return NULL;
             }
         }
     }
@@ -338,16 +451,16 @@ char* handle_file_conflict(const char* output_dir, const char* original_filename
     return final_path;
 }
 
-// Core decryption function - only handles the cryptographic operations
-int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, unsigned char* iv) {
+// Core decryption function
+// Core decryption function
+int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, const unsigned char* iv) {
     EVP_CIPHER_CTX *ctx;
     unsigned char buffer_in[BUFFER_SIZE];
     unsigned char buffer_out[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
     int bytes_read, out_len;
     int ret = 0;
 
-    // Read IV from input file
-    if (fread(iv, 1, IV_SIZE, ifp) != IV_SIZE) {
+    if (fread((unsigned char*)iv, 1, IV_SIZE, ifp) != IV_SIZE) {
         printf("Error reading IV from file\n");
         return -1;
     }
@@ -358,24 +471,27 @@ int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, unsigned char* i
     }
 
     if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv)) {
+        printf("Error initializing decryption\n");
         EVP_CIPHER_CTX_free(ctx);
         return -1;
     }
 
-    // Get file sizes
     fseek(ifp, 0, SEEK_END);
     long file_size = ftell(ifp);
     fseek(ifp, IV_SIZE, SEEK_SET);
-    long encrypted_size = file_size - IV_SIZE - 16;  // Subtract IV and tag size
+    long encrypted_size = file_size - IV_SIZE - 16;
 
-    // Decrypt file content
     long total_read = 0;
     while (total_read < encrypted_size) {
         bytes_read = fread(buffer_in, 1, 
                           ((encrypted_size - total_read) > BUFFER_SIZE) ? 
                           BUFFER_SIZE : (encrypted_size - total_read), 
                           ifp);
-        if (bytes_read <= 0) break;
+        if (bytes_read <= 0) {
+            printf("Error reading from input file\n");
+            ret = -1;
+            break;
+        }
         
         total_read += bytes_read;
         if (!EVP_DecryptUpdate(ctx, buffer_out, &out_len, buffer_in, bytes_read)) {
@@ -384,134 +500,297 @@ int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, unsigned char* i
             break;
         }
         if (fwrite(buffer_out, 1, out_len, ofp) != (size_t)out_len) {
+            printf("Error writing to output file\n");
             ret = -1;
             break;
         }
     }
 
-    // Handle authentication tag
-    if (ret == 0) {
-        unsigned char tag[16];
-        if (fread(tag, 1, 16, ifp) != 16) {
-            printf("Error reading authentication tag\n");
-            ret = -1;
-        }
-
-        if (ret == 0) {
-            EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
-            if (EVP_DecryptFinal_ex(ctx, buffer_out, &out_len) <= 0) {
-                printf("Error authenticating decrypted data\n");
-                ret = -1;
-            } else if (fwrite(buffer_out, 1, out_len, ofp) != (size_t)out_len) {
-                ret = -1;
-            }
-        }
-    }
+	if (ret == 0) {
+		unsigned char tag[16];
+		if (fread(tag, 1, 16, ifp) != 16) {
+			printf("Error reading authentication tag\n");
+			ret = -1;
+		} else {
+			EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
+			if (EVP_DecryptFinal_ex(ctx, buffer_out, &out_len) <= 0) {
+				printf("Error authenticating decrypted data\n");
+				ret = -1;
+			} else if (fwrite(buffer_out, 1, out_len, ofp) != (size_t)out_len) {
+				printf("Error writing to output file\n");
+				ret = -1;
+			}
+		}
+	}
 
     EVP_CIPHER_CTX_free(ctx);
     return ret;
 }
 
-// Main decrypt function - handles file operations and calls core decrypt
-int decrypt_file(const char* input_path, const char* output_dir, 
-                unsigned char* key, unsigned char* iv, const Metadata* metadata) {
-    FILE *ifp = NULL, *ofp = NULL;
-    int ret = -1;
-    char *final_path;
-
-    // Create output directory if it doesn't exist
-    mkdir(output_dir, 0700);
-
-    // Open input file
-    ifp = fopen(input_path, "rb");
-    if (!ifp) {
-        printf("Error opening encrypted file: %s\n", strerror(errno));
-        return -1;
-    }
-
-    // Handle file conflicts and get final path
-    final_path = handle_file_conflict(output_dir, metadata->original_filename);
+int decrypt_file_chunked(const char* output_dir, unsigned char* key, const Metadata* metadata) {
+    // First, get the final path handling any conflicts
+    char initial_path[512];
+    snprintf(initial_path, sizeof(initial_path), "%s/%s", output_dir, metadata->original_filename);
+    
+    const char* final_path = handle_file_conflict(output_dir, metadata->original_filename);
     if (!final_path) {
-        printf("Error handling file path\n");
-        fclose(ifp);
+        printf("Error handling file conflict\n");
         return -1;
     }
 
-    // Open output file
-    ofp = fopen(final_path, "wb");
+    // Create output directory
+    char* dir_path = strdup(output_dir);
+    if (dir_path) {
+        if (mkdir(dir_path, 0755) != 0 && errno != EEXIST) {
+            printf("Error creating output directory: %s\n", strerror(errno));
+        }
+        free(dir_path);
+    }
+
+    printf("Final output file path: %s\n", final_path);
+
+    FILE* ofp = fopen(final_path, "wb");
     if (!ofp) {
         printf("Error opening output file: %s\n", strerror(errno));
-        fclose(ifp);
         return -1;
     }
 
-    // Perform decryption
-    ret = decrypt_file_core(ifp, ofp, key, iv);
-    
-    // Clean up
-    fclose(ifp);
+    // Process each chunk
+    for (size_t i = 0; i < metadata->chunk_count; i++) {
+        // Construct chunk path from hash stored in metadata
+        char chunk_path[512];
+        snprintf(chunk_path, sizeof(chunk_path), "%s%s.chunk", 
+                STORAGE_PATH, metadata->chunk_hashes[i]);
+        
+        printf("Processing chunk %zu: %s\n", i, chunk_path);
+        
+        FILE* chunk_fp = fopen(chunk_path, "rb");
+        if (!chunk_fp) {
+            printf("Error opening chunk file: %s\n", chunk_path);
+            fclose(ofp);
+            return -1;
+        }
+
+        // Decrypt chunk
+        if (decrypt_file_core(chunk_fp, ofp, key, metadata->iv) != 0) {
+            printf("Error decrypting chunk %zu\n", i);
+            fclose(chunk_fp);
+            fclose(ofp);
+            return -1;
+        }
+
+        fclose(chunk_fp);
+        printf("Chunk %zu/%zu decrypted\n", i + 1, metadata->chunk_count);
+    }
+
     fclose(ofp);
-
-    if (ret == 0) {
-        printf("\nFile successfully decrypted to: %s\n", final_path);
-        printf("Decrypted file information:\n");
-        print_file_info(final_path);
-    } else {
-        remove(final_path);  // Clean up partial file on error
-    }
-
-    return ret;
+    printf("\nFile successfully decrypted to: %s\n", final_path);
+    print_file_info(final_path);
+    return 0;
 }
 
-// Save metadata
-int save_metadata(const Metadata* metadata) {
-    char hashed_filename[HASH_SIZE];
-    hash_token(metadata->token, hashed_filename);
-    
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), "%s%s.meta", STORAGE_PATH, hashed_filename);
-    
-    FILE* fp = fopen(filepath, "wb");
-    if (!fp) {
-        printf("Error opening metadata file: %s\n", strerror(errno));
-        return -1;
-    }
-    
-    size_t written = fwrite(metadata, sizeof(Metadata), 1, fp);
-    fclose(fp);
-    return (written == 1) ? 0 : -1;
+// New function to generate random chunk size
+size_t generate_chunk_size(void) {
+    size_t range = MAX_CHUNK_SIZE - MIN_CHUNK_SIZE;
+    size_t random_offset = (size_t)(((double)rand() / RAND_MAX) * range);
+    return MIN_CHUNK_SIZE + random_offset;
 }
 
-// Load metadata
-int load_metadata(const char* token, Metadata* metadata) {
-    char hashed_filename[HASH_SIZE];
-    hash_token(token, hashed_filename);
-    
-    char filepath[512];
-    snprintf(filepath, sizeof(filepath), "%s%s.meta", STORAGE_PATH, hashed_filename);
-    
-    FILE* fp = fopen(filepath, "rb");
-    if (!fp) {
-        printf("Error opening metadata file: %s\n", strerror(errno));
-        return -1;
-    }
-    
-    size_t read = fread(metadata, sizeof(Metadata), 1, fp);
-    fclose(fp);
-    return (read == 1) ? 0 : -1;
-}
-
-
-// check file existence and get info
-void print_file_info(const char* filepath) {
+int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk_count,
+                      const char* token, size_t* file_size, Metadata* metadata) {
     struct stat st;
-    if (stat(filepath, &st) == 0) {
-        char time_str[100];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));
-        printf("Size: %ld bytes\n", st.st_size);
-        printf("Last modified: %s\n", time_str);
+    if (stat(input_path, &st) == -1) {
+        printf("Error: Input file does not exist\n");
+        return -1;
     }
+
+    *file_size = st.st_size;
+    size_t remaining_size = *file_size;
+    *chunk_count = 0;
+    
+    // Calculate number of chunks needed
+    while (remaining_size > 0) {
+        size_t chunk_size = generate_chunk_size();
+        if (chunk_size > remaining_size) {
+            chunk_size = remaining_size;
+        }
+        (*chunk_count)++;
+        remaining_size -= chunk_size;
+        
+        if (*chunk_count >= MAX_CHUNKS) {
+            printf("Error: File too large, maximum chunks exceeded\n");
+            return -1;
+        }
+    }
+
+    // Allocate memory for chunk paths
+    *chunk_paths = malloc(*chunk_count * sizeof(char*));
+    if (!*chunk_paths) {
+        printf("Error: Memory allocation failed\n");
+        return -1;
+    }
+
+    mkdir(STORAGE_PATH, 0700);
+    char base_hash[HASH_SIZE];
+    hash_token(token, base_hash);
+
+    // Generate chunk paths and store hashes
+    for (size_t i = 0; i < *chunk_count; i++) {
+        (*chunk_paths)[i] = malloc(512);
+        if (!(*chunk_paths)[i]) {
+            // Cleanup previously allocated memory
+            for (size_t j = 0; j < i; j++) {
+                free((*chunk_paths)[j]);
+            }
+            free(*chunk_paths);
+            printf("Error: Memory allocation failed for chunk path\n");
+            return -1;
+        }
+
+        // Generate unique hash for each chunk
+        char chunk_input[HASH_SIZE + 20];
+        snprintf(chunk_input, sizeof(chunk_input), "%s_%zu", base_hash, i);
+        
+        // Store just the hash in metadata
+        char chunk_hash[HASH_SIZE];
+        hash_token(chunk_input, chunk_hash);
+        strncpy(metadata->chunk_hashes[i], chunk_hash, HASH_SIZE - 1);
+        metadata->chunk_hashes[i][HASH_SIZE - 1] = '\0';
+
+        // Construct the full path for chunk_paths
+        snprintf((*chunk_paths)[i], 512, "%s%s.chunk", STORAGE_PATH, chunk_hash);
+        
+        printf("Chunk %zu path: %s\n", i, (*chunk_paths)[i]);
+    }
+
+    printf("File will be split into %zu chunks\n", *chunk_count);
+    return 0;
 }
+
+
+
+
+// New function to encrypt file in chunks
+int encrypt_file_chunked(const char* input_path, char** chunk_paths, size_t chunk_count, 
+                        unsigned char* key, Metadata* metadata) {
+    FILE* ifp = fopen(input_path, "rb");
+    if (!ifp) {
+        printf("Error opening input file: %s\n", strerror(errno));
+        return -1;
+    }
+
+    size_t remaining_size = metadata->data_size;
+    size_t current_pos = 0;
+
+    for (size_t i = 0; i < chunk_count; i++) {
+        size_t chunk_size = generate_chunk_size();
+        if (chunk_size > remaining_size) {
+            chunk_size = remaining_size;
+        }
+
+        unsigned char chunk_iv[IV_SIZE];
+        if (RAND_bytes(chunk_iv, IV_SIZE) != 1) {
+            fclose(ifp);
+            return -1;
+        }
+
+        metadata->chunk_sizes[i] = chunk_size;
+
+        // Use the already generated and stored chunk path from handle_store_file
+        const char* chunk_path = chunk_paths[i];
+
+        FILE* temp_fp = fopen(chunk_path, "wb");
+        if (!temp_fp) {
+            fclose(ifp);
+            return -1;
+        }
+
+        fseek(ifp, current_pos, SEEK_SET);
+
+        EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+        if (!ctx) {
+            fclose(ifp);
+            fclose(temp_fp);
+            return -1;
+        }
+
+        if (!EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, chunk_iv)) {
+            EVP_CIPHER_CTX_free(ctx);
+            fclose(ifp);
+            fclose(temp_fp);
+            return -1;
+        }
+
+        if (fwrite(chunk_iv, 1, IV_SIZE, temp_fp) != IV_SIZE) {
+            EVP_CIPHER_CTX_free(ctx);
+            fclose(ifp);
+            fclose(temp_fp);
+            return -1;
+        }
+
+        unsigned char buffer_in[BUFFER_SIZE];
+        unsigned char buffer_out[BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH];
+        size_t total_read = 0;
+        int out_len;
+
+        while (total_read < chunk_size) {
+            size_t to_read = (chunk_size - total_read) < BUFFER_SIZE ? 
+                            (chunk_size - total_read) : BUFFER_SIZE;
+            
+            size_t bytes_read = fread(buffer_in, 1, to_read, ifp);
+            if (bytes_read == 0) break;
+
+            if (!EVP_EncryptUpdate(ctx, buffer_out, &out_len, buffer_in, bytes_read)) {
+                EVP_CIPHER_CTX_free(ctx);
+                fclose(ifp);
+                fclose(temp_fp);
+                return -1;
+            }
+
+            if (fwrite(buffer_out, 1, out_len, temp_fp) != (size_t)out_len) {
+                EVP_CIPHER_CTX_free(ctx);
+                fclose(ifp);
+                fclose(temp_fp);
+                return -1;
+            }
+
+            total_read += bytes_read;
+        }
+
+        if (EVP_EncryptFinal_ex(ctx, buffer_out, &out_len)) {
+            if (fwrite(buffer_out, 1, out_len, temp_fp) != (size_t)out_len) {
+                EVP_CIPHER_CTX_free(ctx);
+                fclose(ifp);
+                fclose(temp_fp);
+                return -1;
+            }
+        }
+
+        unsigned char tag[16];
+        if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag)) {
+            if (fwrite(tag, 1, 16, temp_fp) != 16) {
+                EVP_CIPHER_CTX_free(ctx);
+                fclose(ifp);
+                fclose(temp_fp);
+                return -1;
+            }
+        }
+
+        EVP_CIPHER_CTX_free(ctx);
+        fclose(temp_fp);
+
+        current_pos += chunk_size;
+        remaining_size -= chunk_size;
+
+        printf("Chunk %zu/%zu encrypted (%zu bytes)\n", i + 1, chunk_count, chunk_size);
+    }
+
+    fclose(ifp);
+    metadata->chunk_count = chunk_count;
+    return 0;
+}
+
+
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
@@ -530,69 +809,66 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-	if (strcmp(argv[1], "store") == 0) {
-		char* token = generate_token();
-		if (!token) {
-			printf("Error generating token\n");
-			return 1;
-		}
+    if (strcmp(argv[1], "store") == 0) {
+        char* token = generate_token();
+        if (!token) {
+            printf("Error generating token\n");
+            return 1;
+        }
 
-		char* encrypted_path = NULL;
-		size_t original_file_size = 0;
-		if (handle_store_file(argv[2], &encrypted_path, token, &original_file_size) != 0) {
-			free(token);
-			return 1;
-		}
+        char** chunk_paths = NULL;
+        size_t chunk_count = 0;
+        size_t original_file_size = 0;
+        
+        // Declare and initialize Metadata
+        Metadata metadata = {0};  // Initialize to zero
+        strncpy(metadata.token, token, TOKEN_SIZE);
 
-		unsigned char iv[IV_SIZE];
-		printf("Encrypting file...\n");
-		if (encrypt_file(argv[2], encrypted_path, key, iv) == 0) {
-			Metadata metadata;
-			strncpy(metadata.token, token, TOKEN_SIZE);
-			metadata.data_size = original_file_size;  // Store the actual file size
-			memcpy(metadata.iv, iv, IV_SIZE);
-			strncpy(metadata.original_filename, argv[2], sizeof(metadata.original_filename));
-			
-			printf("Saving metadata...\n");
-			if (save_metadata(&metadata) == 0) {
-				printf("\nFile encrypted successfully.\n");
-				printf("Original file size: %zu bytes\n", original_file_size);
-				printf("Encrypted file information:\n");
-				print_file_info(encrypted_path);
-				printf("\nToken: %s\n", token);
-				printf("Keep this token safe - you'll need it to retrieve your file.\n");
-			} else {
-				printf("Error saving metadata.\n");
-			}
-		} else {
-			printf("Error encrypting file.\n");
-		}
-		
-		free(encrypted_path);
-		free(token);
-	}
+        if (handle_store_file(argv[2], &chunk_paths, &chunk_count, token, &original_file_size, &metadata) != 0) {
+            free(token);
+            return 1;
+        }
+
+        metadata.data_size = original_file_size;
+        strncpy(metadata.original_filename, argv[2], sizeof(metadata.original_filename));
+
+        printf("Encrypting file in chunks...\n");
+        if (encrypt_file_chunked(argv[2], chunk_paths, chunk_count, key, &metadata) == 0) {
+            printf("Saving metadata...\n");
+            if (save_metadata(&metadata) == 0) {
+                printf("\nFile encrypted successfully in %zu chunks.\n", chunk_count);
+                printf("Token: %s\n", token);
+                printf("Keep this token safe - you'll need it to retrieve your file.\n");
+            }
+        }
+
+        // Cleanup
+        for (size_t i = 0; i < chunk_count; i++) {
+            free(chunk_paths[i]);
+        }
+        free(chunk_paths);
+        free(token);
+    }
     else if (strcmp(argv[1], "retrieve") == 0) {
         if (argc < 4) {
             printf("Error: Output path required for retrieval.\n");
             return 1;
         }
 
+        printf("\nStarting file retrieval process...\n");
+        printf("Token: %s\n", argv[2]);
+        
         Metadata metadata;
+        printf("Loading metadata...\n");
         if (load_metadata(argv[2], &metadata) == 0) {
-            char hashed_filename[HASH_SIZE];
-            hash_token(argv[2], hashed_filename);
-            
-            char encrypted_path[512];
-            snprintf(encrypted_path, sizeof(encrypted_path), 
-                     "%s%s.enc", STORAGE_PATH, hashed_filename);
-
-            if (decrypt_file(encrypted_path, argv[3], key, metadata.iv, &metadata) == 0) {
-                printf("File decrypted successfully.\n");
+            if (decrypt_file_chunked(argv[3], key, &metadata) == 0) {
+                printf("\nRetrieval process completed successfully.\n");
             } else {
-                printf("Error decrypting file.\n");
+                printf("\nError: Decryption failed.\n");
             }
         } else {
             printf("Error: Invalid token or metadata not found.\n");
+            printf("Please check if the token is correct and try again.\n");
         }
     }
     else {
