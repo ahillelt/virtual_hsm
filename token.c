@@ -26,10 +26,22 @@
 #define MAX_CHUNK_SIZE (10 * 1024 * 1024) // 10MB
 #define MAX_CHUNKS 1000                    // Maximum number of chunks per file
 
-
-
 // Add encrypted metadata magic number for validation
 #define METADATA_MAGIC 0x4D455441  // "META" in hex
+
+#define HELP_TEXT \
+    "Usage:\n" \
+    "To store with auto-generated key:\n" \
+    "  %s store <filepath>\n" \
+    "To store with existing key:\n" \
+    "  %s store <filepath> --key <keypath>\n" \
+    "To retrieve:\n" \
+    "  %s retrieve <token> <output_path> [--key <keypath>]\n" \
+    "To generate a new master key:\n" \
+    "  %s generate-key <output_keypath>\n"
+
+// global variable for custom key path
+static char* g_custom_key_path = NULL;
 
 
 typedef struct {
@@ -59,6 +71,7 @@ void print_file_info(const char* filepath);
 
 char* handle_file_conflict(const char* output_dir, const char* original_filename);
 int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, const unsigned char* iv);
+int handle_decryption_failure(unsigned char* key, const char* token, const char* output_path);
 
 // chunking
 size_t generate_chunk_size(void);
@@ -72,6 +85,9 @@ int decrypt_metadata(const char* filepath, const unsigned char* key, Metadata* m
 int save_metadata(const Metadata* metadata);
 int load_metadata(const char* token, Metadata* metadata);
 
+int generate_key_file(const char* key_path);
+int handle_key_initialization(unsigned char* key, const char* provided_key_path);
+void cleanup_key_path();
 
 // Function to convert bytes to hex string
 void bytes_to_hex(const unsigned char* bytes, size_t len, char* hex) {
@@ -79,6 +95,120 @@ void bytes_to_hex(const unsigned char* bytes, size_t len, char* hex) {
         sprintf(hex + (i * 2), "%02x", bytes[i]);
     }
     hex[len * 2] = '\0';
+}
+
+int generate_key_file(const char* key_path) {
+    unsigned char new_key[KEY_SIZE];
+    if (RAND_bytes(new_key, KEY_SIZE) != 1) {
+        printf("Error generating random key\n");
+        return -1;
+    }
+
+    FILE* fp = fopen(key_path, "wb");
+    if (!fp) {
+        printf("Error creating key file: %s\n", strerror(errno));
+        return -1;
+    }
+
+    size_t written = fwrite(new_key, 1, KEY_SIZE, fp);
+    fclose(fp);
+
+    if (written != KEY_SIZE) {
+        printf("Error writing key file\n");
+        return -1;
+    }
+
+    printf("New master key generated successfully at: %s\n", key_path);
+    return 0;
+}
+
+
+int handle_key_initialization(unsigned char* key, const char* provided_key_path) {
+    if (provided_key_path) {
+        // Store the provided key path globally
+        if (g_custom_key_path) {
+            free(g_custom_key_path);
+        }
+        g_custom_key_path = strdup(provided_key_path);
+        if (!g_custom_key_path) {
+            printf("Error allocating memory for key path\n");
+            return -1;
+        }
+        return load_key(key);
+    }
+
+    // Check for default key
+    if (access(KEY_FILE_PATH, F_OK) == 0) {
+        return load_key(key);
+    }
+
+    // No key found - ask user what to do
+    printf("\nNo master key found. Choose an option:\n");
+    printf("1) Generate a new master key\n");
+    printf("2) Provide path to existing key\n");
+    printf("Choice (1 or 2): ");
+
+    char choice[8];
+    if (fgets(choice, sizeof(choice), stdin) == NULL) {
+        return -1;
+    }
+    choice[strcspn(choice, "\n")] = 0;
+
+    if (strcmp(choice, "1") == 0) {
+        printf("Generating new master key...\n");
+        if (RAND_bytes(key, KEY_SIZE) != 1) {
+            printf("Error generating key\n");
+            return -1;
+        }
+        if (save_key(key) != 0) {
+            printf("Error saving generated key\n");
+            return -1;
+        }
+        printf("New master key generated and saved to: %s\n", KEY_FILE_PATH);
+        return 0;
+    } 
+    else if (strcmp(choice, "2") == 0) {
+        char key_path[512];
+        printf("Enter path to key file: ");
+        if (fgets(key_path, sizeof(key_path), stdin) == NULL) {
+            return -1;
+        }
+        key_path[strcspn(key_path, "\n")] = 0;
+
+        // Update global key path
+        if (g_custom_key_path) {
+            free(g_custom_key_path);
+        }
+        g_custom_key_path = strdup(key_path);
+        if (!g_custom_key_path) {
+            printf("Error allocating memory for key path\n");
+            return -1;
+        }
+
+        FILE* fp = fopen(key_path, "rb");
+        if (!fp) {
+            printf("Error opening provided key file\n");
+            return -1;
+        }
+        size_t read = fread(key, 1, KEY_SIZE, fp);
+        fclose(fp);
+        if (read != KEY_SIZE) {
+            printf("Error: Invalid key file\n");
+            return -1;
+        }
+        return 0;
+    }
+
+    printf("Invalid choice\n");
+    return -1;
+}
+
+// Key cleanup function
+void cleanup_key_path() {
+    if (g_custom_key_path) {
+        free(g_custom_key_path);
+        g_custom_key_path = NULL;
+    }
 }
 
 // Function to hash token into filename
@@ -131,7 +261,8 @@ int save_key(const unsigned char* key) {
 
 // Function to load the encryption key
 int load_key(unsigned char* key) {
-    FILE* fp = fopen(KEY_FILE_PATH, "rb");
+    const char* key_path = g_custom_key_path ? g_custom_key_path : KEY_FILE_PATH;
+    FILE* fp = fopen(key_path, "rb");
     if (!fp) {
         printf("Error opening key file: %s\n", strerror(errno));
         return -1;
@@ -451,7 +582,51 @@ char* handle_file_conflict(const char* output_dir, const char* original_filename
     return final_path;
 }
 
-// Core decryption function
+int handle_decryption_failure(unsigned char* key, const char* token, const char* output_path) {
+    printf("\nDecryption failed. This could be due to:\n");
+    printf("1) Incorrect master key\n");
+    printf("2) Corrupted data\n");
+    printf("3) Invalid token\n\n");
+    
+    printf("Would you like to try a different master key? (y/n): ");
+    char choice[8];
+    if (fgets(choice, sizeof(choice), stdin) == NULL) {
+        return -1;
+    }
+    choice[strcspn(choice, "\n")] = 0;
+
+    if (choice[0] == 'y' || choice[0] == 'Y') {
+        printf("Enter path to alternative key file: ");
+        char key_path[512];
+        if (fgets(key_path, sizeof(key_path), stdin) == NULL) {
+            return -1;
+        }
+        key_path[strcspn(key_path, "\n")] = 0;
+
+        FILE* fp = fopen(key_path, "rb");
+        if (!fp) {
+            printf("Error opening key file\n");
+            return -1;
+        }
+        size_t read = fread(key, 1, KEY_SIZE, fp);
+        fclose(fp);
+
+        if (read != KEY_SIZE) {
+            printf("Error: Invalid key file\n");
+            return -1;
+        }
+
+        // Try decryption again with new key
+        Metadata metadata;
+        printf("\nRetrying decryption with new key...\n");
+        if (load_metadata(token, &metadata) == 0) {
+            return decrypt_file_chunked(output_path, key, &metadata);
+        }
+    }
+
+    return -1;
+}
+
 // Core decryption function
 int decrypt_file_core(FILE* ifp, FILE* ofp, unsigned char* key, const unsigned char* iv) {
     EVP_CIPHER_CTX *ctx;
@@ -793,29 +968,51 @@ int encrypt_file_chunked(const char* input_path, char** chunk_paths, size_t chun
 
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        printf("Usage:\n");
-        printf("To store: %s store <filepath>\n", argv[0]);
-        printf("To retrieve: %s retrieve <token> <output_path>\n", argv[0]);
+    if (argc < 2) {
+        printf(HELP_TEXT, argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
 
     mkdir(STORAGE_PATH, 0700);
     OpenSSL_add_all_algorithms();
 
+    // Handle generate-key command
+    if (strcmp(argv[1], "generate-key") == 0) {
+        if (argc < 3) {
+            printf("Error: Path required for key generation\n");
+            return 1;
+        }
+        return generate_key_file(argv[2]);
+    }
+
+    // Parse command line arguments for key path
+    char* key_path = NULL;
+    for (int i = 1; i < argc - 1; i++) {
+        if (strcmp(argv[i], "--key") == 0) {
+            key_path = argv[i + 1];
+            break;
+        }
+    }
+
     unsigned char key[KEY_SIZE];
-    if (initialize_key(key) != 0) {
+    if (handle_key_initialization(key, key_path) != 0) {
         printf("Error initializing encryption key\n");
         return 1;
     }
 
+
     if (strcmp(argv[1], "store") == 0) {
+        if (argc < 3) {
+            printf("Error: File path required for storage\n");
+            return 1;
+        }
+
         char* token = generate_token();
         if (!token) {
             printf("Error generating token\n");
             return 1;
         }
-
+		
         char** chunk_paths = NULL;
         size_t chunk_count = 0;
         size_t original_file_size = 0;
@@ -851,7 +1048,7 @@ int main(int argc, char* argv[]) {
     }
     else if (strcmp(argv[1], "retrieve") == 0) {
         if (argc < 4) {
-            printf("Error: Output path required for retrieval.\n");
+            printf("Error: Token and output path required for retrieval\n");
             return 1;
         }
 
@@ -864,16 +1061,28 @@ int main(int argc, char* argv[]) {
             if (decrypt_file_chunked(argv[3], key, &metadata) == 0) {
                 printf("\nRetrieval process completed successfully.\n");
             } else {
-                printf("\nError: Decryption failed.\n");
+                if (handle_decryption_failure(key, argv[2], argv[3]) == 0) {
+                    printf("\nRetrieval process completed successfully with alternative key.\n");
+                } else {
+                    printf("\nDecryption failed with all attempted keys.\n");
+                    return 1;
+                }
             }
         } else {
-            printf("Error: Invalid token or metadata not found.\n");
-            printf("Please check if the token is correct and try again.\n");
+            printf("Error: Could not load or decrypt metadata.\n");
+            if (handle_decryption_failure(key, argv[2], argv[3]) == 0) {
+                printf("\nRetrieval process completed successfully with alternative key.\n");
+            } else {
+                printf("\nAll decryption attempts failed.\n");
+                return 1;
+            }
         }
     }
     else {
-        printf("Invalid command. Use 'store' or 'retrieve'.\n");
+        printf(HELP_TEXT, argv[0], argv[0], argv[0], argv[0]);
+        return 1;
     }
 
+	cleanup_key_path(); 
     return 0;
 }
