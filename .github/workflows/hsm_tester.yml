@@ -202,16 +202,9 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          # Fetch the latest changes
           git fetch origin main
+          git checkout main
           
-          # Reset local changes in release directories to prevent conflicts
-          git checkout origin/main -- release/ release_package/
-          
-          # Pull with rebase to handle concurrent changes more smoothly
-          git pull --rebase --autostash origin main
-          
-          # Add binaries and release artifacts
           if [ -f "release_package/${{ matrix.output }}" ]; then
             chmod +x "release_package/${{ matrix.output }}"
             git add -f "release_package/${{ matrix.output }}" || {
@@ -236,15 +229,12 @@ jobs:
               exit 0
             }
             
-            git push origin main || {
-              echo "Push failed due to conflict"
-              exit 1
-            }
+            git pull --rebase origin main
+            git push origin main
           else
             echo "Error: Binary not found for commit"
             exit 1
           fi
-
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
