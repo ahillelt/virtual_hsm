@@ -20,7 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-  
+    # ... rest of the build-and-test job remains the same ...
+
   cross-compile:
     needs: build-and-test
     runs-on: ubuntu-latest
@@ -42,59 +43,7 @@ jobs:
             defines: "-DWIN32_LEAN_AND_MEAN -D_WIN32"
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare Directories and Reset
-        run: |
-              # Ensure release and release_package directories exist
-              mkdir -p release release_package
-              
-              # Configure Git user for committing
-              git config --local user.email "action@github.com"
-              git config --local user.name "GitHub Action"
-              
-              # Fetch latest changes from origin
-              git fetch origin main
-              
-              # Reset tracked release directories if they exist
-              git checkout origin/main -- release/ || true
-              git checkout origin/main -- release_package/ || true
-              
-              # Pull with rebase to integrate latest changes smoothly
-              git pull --rebase --autostash origin main
-              
-              # Proceed with adding binaries and release artifacts
-              if [ -f "release_package/${{ matrix.output }}" ]; then
-                chmod +x "release_package/${{ matrix.output }}"
-                git add -f "release_package/${{ matrix.output }}" || {
-                  echo "Failed to add binary"
-                  exit 1
-                }
-                
-                if [[ "${{ matrix.target }}" == windows-* ]]; then
-                  git add -f "release/${{ matrix.output }}_release.zip" || {
-                    echo "Failed to add release zip"
-                    exit 1
-                  }
-                else
-                  git add -f "release/${{ matrix.output }}_release.tar.gz" || {
-                    echo "Failed to add release tar.gz"
-                    exit 1
-                  }
-                fi
-                
-                git commit -m "Update binary and release artifacts for ${{ matrix.target }}" || {
-                  echo "No changes to commit"
-                  exit 0
-                }
-                
-                git push origin main || {
-                  echo "Push failed due to conflict"
-                  exit 1
-                }
-              else
-                echo "Error: Binary not found for commit"
-                exit 1
-              fi
-        
+
       - name: Install dependencies 
         run: |
           sudo apt-get update
