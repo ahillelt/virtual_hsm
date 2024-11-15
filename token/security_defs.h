@@ -26,7 +26,7 @@
 // Chunking Definitions
 #define MIN_CHUNK_SIZE (5 * 1024 * 1024)  // 5MB
 #define MAX_CHUNK_SIZE (10 * 1024 * 1024) // 10MB
-#define MAX_CHUNKS 1000                    // Maximum number of chunks per file
+#define MAX_CHUNKS 1500                    // Maximum number of chunks per file
 
 #define METADATA_MAGIC 0x4D455441  // "META" in hex
 #define SECURE_WIPE(ptr, len) sodium_memzero(ptr, len)

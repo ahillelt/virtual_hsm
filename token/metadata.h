@@ -29,6 +29,8 @@ typedef struct {
     unsigned char iv[IV_SIZE];
 } MetadataHeader;
 
+
+
 // Function declarations
 int save_metadata(const SecureMetadata* metadata);
 int load_metadata(const char* token, SecureMetadata* metadata);
@@ -69,18 +71,10 @@ int load_metadata(const char* token, SecureMetadata* metadata) {
     return decrypt_metadata(filepath, key, metadata);
 }
 
-int validate_metadata(const SecureMetadata* metadata, 
-                     const unsigned char* master_key) {
+int validate_metadata(const SecureMetadata* metadata, const unsigned char* master_key) {
     unsigned char hmac[crypto_auth_BYTES];
-    
-    // Calculate HMAC of metadata fields
-    crypto_auth(hmac, 
-                (unsigned char*)metadata, 
-                offsetof(SecureMetadata, hmac),
-                master_key);
-    
-    // Constant time comparison
-    return crypto_verify_32(hmac, metadata->hmac);
+    crypto_auth(hmac, (unsigned char*)metadata, offsetof(SecureMetadata, hmac), master_key);
+    return CRYPTO_memcmp(hmac, metadata->hmac, crypto_auth_BYTES) == 0;
 }
 
 int encrypt_metadata(const SecureMetadata* metadata, const unsigned char* key, const char* filepath) {
