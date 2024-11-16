@@ -439,13 +439,12 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
                      unsigned char* key,
                      const unsigned char* iv_unused,
                      size_t chunk_size) {
-						 
     EVP_CIPHER_CTX* ctx = NULL;
     unsigned char iv[IV_SIZE];
     unsigned char tag[16];
     unsigned char* buffer_in = NULL;
     unsigned char* buffer_out = NULL;
-	(void)iv_unused; // Compatibility var
+    (void)iv_unused; // Compatibility var
     int ret = -1;
     
     // Validate input parameters
@@ -454,15 +453,13 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
         return -1;
     }
     
-    // Initialize buffers with calloc instead of malloc
-    buffer_in = calloc(1, BUFFER_SIZE);
-    buffer_out = calloc(1, BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
+    // Initialize buffers - fixed double allocation
+    buffer_in = malloc(BUFFER_SIZE);
+    buffer_out = malloc(BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
     if (!buffer_in || !buffer_out) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
     }
-	
-	
     
     // Read IV from chunk file
     if (fread(iv, 1, IV_SIZE, ifp) != IV_SIZE) {
@@ -472,15 +469,15 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
     
     // Initialize decryption context
     ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) goto cleanup;
-    
-    if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv)) {
+    if (!ctx) {
+        printf("Error: Failed to create cipher context\n");
         goto cleanup;
     }
     
-    buffer_in = malloc(BUFFER_SIZE);
-    buffer_out = malloc(BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
-    if (!buffer_in || !buffer_out) goto cleanup;
+    if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, iv)) {
+        printf("Error: Failed to initialize decryption\n");
+        goto cleanup;
+    }
     
     // Process the encrypted data - note that we exclude IV and tag from the chunk size
     size_t data_size = chunk_size;
@@ -491,15 +488,24 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
                         (data_size - total_read) : BUFFER_SIZE;
                         
         size_t bytes_read = fread(buffer_in, 1, to_read, ifp);
-        if (bytes_read == 0) break;
+        if (bytes_read == 0) {
+            if (feof(ifp)) {
+                printf("Error: Unexpected end of file\n");
+            } else {
+                printf("Error: Failed to read chunk data\n");
+            }
+            goto cleanup;
+        }
         
         int outlen;
         if (!EVP_DecryptUpdate(ctx, buffer_out, &outlen, buffer_in, bytes_read)) {
+            printf("Error: Decryption update failed\n");
             goto cleanup;
         }
         
         if (outlen > 0) {
             if (fwrite(buffer_out, 1, outlen, ofp) != (size_t)outlen) {
+                printf("Error: Failed to write decrypted data\n");
                 goto cleanup;
             }
         }
@@ -507,28 +513,33 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
         total_read += bytes_read;
     }
     
-	if (total_read != data_size) {
-    printf("Error: Chunk size mismatch - expected %zu bytes but read %zu\n", 
-           data_size, total_read);
-    goto cleanup;
-}
+    if (total_read != data_size) {
+        printf("Error: Chunk size mismatch - expected %zu bytes but read %zu\n", 
+               data_size, total_read);
+        goto cleanup;
+    }
+
     // Read authentication tag
     if (fread(tag, 1, 16, ifp) != 16) {
+        printf("Error: Failed to read authentication tag\n");
         goto cleanup;
     }
     
     if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag)) {
+        printf("Error: Failed to set authentication tag\n");
         goto cleanup;
     }
     
     int final_len;
     unsigned char final_buffer[EVP_MAX_BLOCK_LENGTH];
     if (!EVP_DecryptFinal_ex(ctx, final_buffer, &final_len)) {
+        printf("Error: Authentication failed\n");
         goto cleanup;
     }
     
     if (final_len > 0) {
         if (fwrite(final_buffer, 1, final_len, ofp) != (size_t)final_len) {
+            printf("Error: Failed to write final block\n");
             goto cleanup;
         }
     }
@@ -538,19 +549,16 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
 cleanup:
     if (ctx) {
         EVP_CIPHER_CTX_free(ctx);
-        ctx = NULL;
     }
     
     if (buffer_in) {
         secure_wipe(buffer_in, BUFFER_SIZE);
         free(buffer_in);
-        buffer_in = NULL;
     }
     
     if (buffer_out) {
         secure_wipe(buffer_out, BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
         free(buffer_out);
-        buffer_out = NULL;
     }
 
     // Add memory fence to ensure all cleanup operations complete
