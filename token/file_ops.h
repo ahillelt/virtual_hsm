@@ -181,8 +181,6 @@ int verify_chunk(const char* chunk_path, size_t expected_size) {
     return 0;
 }
 
-
-
 int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk_count,
                      const char* token, size_t* file_size, SecureMetadata* metadata) {
     struct stat st;
@@ -228,9 +226,6 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
             chunk_size > MAX_CHUNK_SIZE) {
             printf("Error: Invalid chunk size calculated: %zu (min: %d, max: %d)\n",
                    chunk_size, MIN_CHUNK_SIZE, MAX_CHUNK_SIZE);
-            for (size_t i = 0; i < current_chunk; i++) {
-                free(chunks[i].path);
-            }
             free(chunks);
             return -1;
         }
@@ -247,9 +242,6 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     if (total_allocated != *file_size) {
         printf("Error: Chunk size calculation mismatch (total: %zu, file: %zu)\n",
                total_allocated, *file_size);
-        for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
-        }
         free(chunks);
         return -1;
     }
@@ -259,9 +251,6 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
 
     // Ensure storage directory exists
     if (ensure_directory_exists(STORAGE_PATH) != 0) {
-        for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
-        }
         free(chunks);
         printf("Error: Failed to create storage directory\n");
         return -1;
@@ -270,9 +259,6 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     // Generate chunk paths and prepare metadata
     char base_hash[HASH_SIZE];
     if (!token) {
-        for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
-        }
         free(chunks);
         printf("Error: Invalid token\n");
         return -1;
@@ -280,33 +266,33 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     hash_token(token, base_hash);
 
     // Allocate array of chunk path pointers
-    *chunk_paths = calloc(current_chunk, sizeof(char*));
-    if (!*chunk_paths) {
-        for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
-        }
-        free(chunks);
-        printf("Error: Memory allocation failed for chunk paths array\n");
-        return -1;
-    }
+	*chunk_paths = malloc((current_chunk + 1) * sizeof(char*));  // +1 for NULL terminator
+	if (!*chunk_paths) {
+		free(chunks);
+		printf("Error: Memory allocation failed for chunk paths array\n");
+		return -1;
+	}
+
+	// Initialize all pointers to NULL
+	for (size_t i = 0; i <= current_chunk; i++) {  // Note: <= to include terminator
+		(*chunk_paths)[i] = NULL;
+	}
 
     // Generate paths and hashes for each chunk
     for (size_t i = 0; i < current_chunk; i++) {
         // Allocate memory for chunk path
-        chunks[i].path = malloc(PATH_MAX);
-        if (!chunks[i].path) {
+        (*chunk_paths)[i] = malloc(PATH_MAX);
+        if (!(*chunk_paths)[i]) {
             // Clean up previously allocated paths
             for (size_t j = 0; j < i; j++) {
-                free(chunks[j].path);
+                free((*chunk_paths)[j]);
             }
-            free(chunks);
             free(*chunk_paths);
             *chunk_paths = NULL;
+            free(chunks);
             printf("Error: Memory allocation failed for chunk path\n");
             return -1;
         }
-
-        (*chunk_paths)[i] = chunks[i].path;
 
         // Generate unique hash for this chunk
         char chunk_input[HASH_SIZE + 32];
@@ -319,16 +305,16 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
         metadata->chunk_sizes[i] = chunks[i].size;
 
         // Generate full path for chunk file
-        int path_len = snprintf(chunks[i].path, PATH_MAX, "%s%s.chunk", 
+        int path_len = snprintf((*chunk_paths)[i], PATH_MAX, "%s%s.chunk", 
                               STORAGE_PATH, metadata->chunk_hashes[i]);
         if (path_len >= PATH_MAX || path_len < 0) {
             // Clean up on path too long error
             for (size_t j = 0; j <= i; j++) {
-                free(chunks[j].path);
+                free((*chunk_paths)[j]);
             }
-            free(chunks);
             free(*chunk_paths);
             *chunk_paths = NULL;
+            free(chunks);
             printf("Error: Path too long for chunk file\n");
             return -1;
         }
@@ -338,11 +324,11 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     FILE* input = fopen(input_path, "rb");
     if (!input) {
         for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
+            free((*chunk_paths)[i]);
         }
-        free(chunks);
         free(*chunk_paths);
         *chunk_paths = NULL;
+        free(chunks);
         printf("Error: Cannot open input file\n");
         return -1;
     }
@@ -352,11 +338,11 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     if (!buffer) {
         fclose(input);
         for (size_t i = 0; i < current_chunk; i++) {
-            free(chunks[i].path);
+            free((*chunk_paths)[i]);
         }
-        free(chunks);
         free(*chunk_paths);
         *chunk_paths = NULL;
+        free(chunks);
         printf("Error: Memory allocation failed for chunk buffer\n");
         return -1;
     }
@@ -364,9 +350,9 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     // Write and verify each chunk
     int success = 1;
     for (size_t i = 0; i < current_chunk; i++) {
-        FILE* chunk_file = fopen(chunks[i].path, "wb");
+        FILE* chunk_file = fopen((*chunk_paths)[i], "wb");
         if (!chunk_file) {
-            printf("Error: Cannot create chunk file %s\n", chunks[i].path);
+            printf("Error: Cannot create chunk file %s\n", (*chunk_paths)[i]);
             success = 0;
             break;
         }
@@ -389,15 +375,14 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
         }
 
         // Verify the chunk was written correctly
-        if (verify_chunk(chunks[i].path, chunks[i].size) != 0) {
-            printf("Error: Chunk verification failed for %s\n", chunks[i].path);
+        if (verify_chunk((*chunk_paths)[i], chunks[i].size) != 0) {
+            printf("Error: Chunk verification failed for %s\n", (*chunk_paths)[i]);
             success = 0;
             break;
         }
 
-        chunks[i].written = 1;
         printf("Chunk %zu written and verified: %s (size: %.2f MB)\n", 
-               i, chunks[i].path, (double)chunks[i].size / (1024 * 1024));
+               i, (*chunk_paths)[i], (double)chunks[i].size / (1024 * 1024));
     }
 
     // Clean up resources
@@ -408,22 +393,20 @@ int handle_store_file(const char* input_path, char*** chunk_paths, size_t* chunk
     if (!success) {
         // Remove any chunks that were written
         for (size_t i = 0; i < current_chunk; i++) {
-            if (chunks[i].written) {
-                unlink(chunks[i].path);
-            }
-            free(chunks[i].path);
+            unlink((*chunk_paths)[i]);  // Remove the chunk file
+            free((*chunk_paths)[i]);    // Free the path memory
         }
-        free(chunks);
-        free(*chunk_paths);
+        free(*chunk_paths);  // Free the array of pointers
         *chunk_paths = NULL;
+        free(chunks);
         return -1;
     }
 
-    // Success - free only the chunk tracking structure
-    free(chunks);
+    free(chunks);  // Free the chunks structure
     printf("All %zu chunks written and verified successfully\n", current_chunk);
     return 0;
 }
+
 
 int sanitize_path(const char* input, char* output, size_t outlen) {
     char resolved[PATH_MAX];

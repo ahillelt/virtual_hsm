@@ -70,6 +70,7 @@ int main(int argc, char* argv[]) {
     SecurityError error = {0};
     char** chunk_paths = NULL;
     char* token = NULL;
+    size_t chunk_count = 0;
 
     if (argc < 2) {
         printf(HELP_TEXT, argv[0], argv[0], argv[0], argv[0]);
@@ -136,7 +137,7 @@ int main(int argc, char* argv[]) {
             goto cleanup;
         }
         
-        size_t chunk_count = 0;
+        
         size_t original_file_size = 0;
         
         SecureMetadata metadata = {0};
@@ -210,9 +211,11 @@ int main(int argc, char* argv[]) {
 
 cleanup:
     if (chunk_paths) {
-        for (size_t i = 0; chunk_paths[i] != NULL; i++) {
-            secure_wipe(chunk_paths[i], strlen(chunk_paths[i]));
-            free(chunk_paths[i]);
+        for (size_t i = 0; i < chunk_count; i++) {  // Use chunk_count instead of NULL check
+            if (chunk_paths[i]) {  // Still check for NULL in case of partial allocation
+                secure_wipe(chunk_paths[i], strlen(chunk_paths[i]));
+                free(chunk_paths[i]);
+            }
         }
         free(chunk_paths);
     }

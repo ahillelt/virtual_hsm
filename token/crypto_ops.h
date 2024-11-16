@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 
+
 // Updated function signatures
 int encrypt_file_secure(const char* input_path, 
                        char** chunk_paths,
@@ -50,6 +51,20 @@ int encrypt_file_secure(const char* input_path,
     unsigned char *buffer_in = NULL;
     unsigned char *buffer_out = NULL;
     int ret = -1;
+    
+    // Initialize all pointers to NULL at the start
+    if (!input_path || !chunk_paths || !master_key || !metadata || !error) {
+        if (error) {
+            snprintf(error->message, sizeof(error->message),
+                    "Invalid NULL parameters provided");
+        }
+        return -1;
+    }
+    
+    // Initialize progress bar variables
+    const int progress_width = 50;
+    size_t total_bytes_processed = 0;
+    int last_progress = 0;
     
     // Allocate buffers
     buffer_in = OPENSSL_malloc(BUFFER_SIZE);
@@ -102,6 +117,14 @@ int encrypt_file_secure(const char* input_path,
     metadata->chunk_count = chunk_count;
     size_t bytes_remaining = metadata->data_size;
     size_t chunk_index = 0;
+    
+    // Initialize progress bar
+    printf("\nEncryption Progress:\n[");
+    for (int i = 0; i < progress_width; i++) {
+        printf(" ");
+    }
+    printf("]\r[");
+    fflush(stdout);
     
     while (bytes_remaining > 0 && chunk_index < chunk_count) {
         // Generate unique IV for each chunk
@@ -168,6 +191,17 @@ int encrypt_file_secure(const char* input_path,
             }
             
             bytes_processed += bytes_read;
+            total_bytes_processed += bytes_read;
+            
+            // Update progress bar
+            float progress = (float)total_bytes_processed / metadata->data_size;
+            int current_progress = (int)(progress * progress_width);
+            
+            for (int j = last_progress; j < current_progress; j++) {
+                printf("=");
+                fflush(stdout);
+            }
+            last_progress = current_progress;
         }
         
         // Finalize encryption for this chunk
@@ -208,6 +242,13 @@ int encrypt_file_secure(const char* input_path,
         chunk_index++;
     }
     
+    // Complete progress bar
+    while (last_progress < progress_width) {
+        printf("=");
+        last_progress++;
+    }
+    printf("] 100%%\n");
+    
     // Calculate metadata HMAC
     crypto_auth(metadata->hmac,
                (unsigned char*)metadata,
@@ -217,17 +258,36 @@ int encrypt_file_secure(const char* input_path,
     ret = 0;
 
 cleanup:
-    if (ctx) EVP_CIPHER_CTX_free(ctx);
-    if (ifp) fclose(ifp);
-    if (temp_fp) fclose(temp_fp);
+    if (ctx) {
+        EVP_CIPHER_CTX_free(ctx);
+        ctx = NULL;
+    }
+    
+    if (ifp) {
+        fclose(ifp);
+        ifp = NULL;
+    }
+    
+    if (temp_fp) {
+        fclose(temp_fp);
+        temp_fp = NULL;
+    }
+    
     if (buffer_in) {
         secure_wipe(buffer_in, BUFFER_SIZE);
         OPENSSL_free(buffer_in);
+        buffer_in = NULL;
     }
+    
     if (buffer_out) {
         secure_wipe(buffer_out, BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
         OPENSSL_free(buffer_out);
+        buffer_out = NULL;
     }
+
+    // Add memory fence to ensure all cleanup operations complete
+    __sync_synchronize();
+    
     return ret;
 }
 
@@ -377,15 +437,30 @@ int decrypt_file_chunked(const char* output_dir,
 // Core decryption function
 int decrypt_file_core(FILE* ifp, FILE* ofp,
                      unsigned char* key,
-                     const unsigned char* iv_unused,  // Kept for API compatibility
+                     const unsigned char* iv_unused,
                      size_t chunk_size) {
+						 
     EVP_CIPHER_CTX* ctx = NULL;
     unsigned char iv[IV_SIZE];
     unsigned char tag[16];
     unsigned char* buffer_in = NULL;
     unsigned char* buffer_out = NULL;
-	(void)iv_unused;
+	(void)iv_unused; // Compatibility var
     int ret = -1;
+    
+    // Validate input parameters
+    if (!ifp || !ofp || !key) {
+        printf("Error: Invalid parameters provided to decrypt_file_core\n");
+        return -1;
+    }
+    
+    // Initialize buffers with calloc instead of malloc
+    buffer_in = calloc(1, BUFFER_SIZE);
+    buffer_out = calloc(1, BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
+    if (!buffer_in || !buffer_out) {
+        printf("Error: Memory allocation failed\n");
+        goto cleanup;
+    }
 	
 	
     
@@ -461,16 +536,28 @@ int decrypt_file_core(FILE* ifp, FILE* ofp,
     ret = 0;
 
 cleanup:
-    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    if (ctx) {
+        EVP_CIPHER_CTX_free(ctx);
+        ctx = NULL;
+    }
+    
     if (buffer_in) {
         secure_wipe(buffer_in, BUFFER_SIZE);
         free(buffer_in);
+        buffer_in = NULL;
     }
+    
     if (buffer_out) {
         secure_wipe(buffer_out, BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
         free(buffer_out);
+        buffer_out = NULL;
     }
+
+    // Add memory fence to ensure all cleanup operations complete
+    __sync_synchronize();
+    
     return ret;
 }
+
 
 #endif // CRYPTO_OPS_H
