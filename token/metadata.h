@@ -3,25 +3,12 @@
 #define METADATA_H
 
 #include "security_defs.h"
-#include "token_utils.h"    // Add for hash_token
-#include "key_management.h" // Add for load_key
+#include "token_utils.h"
+#include "key_management.h"
 #include <openssl/evp.h>
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
-
-typedef struct {
-    char token[TOKEN_SIZE];
-    size_t data_size;
-    unsigned char iv[IV_SIZE];
-    char original_filename[256];
-    size_t chunk_count;
-    char chunk_hashes[MAX_CHUNKS][HASH_SIZE];
-    size_t chunk_sizes[MAX_CHUNKS];
-    unsigned char key_salt[crypto_kdf_KEYBYTES];  // Using KEYBYTES instead of SALTBYTES
-    uint32_t version;
-    unsigned char hmac[crypto_auth_BYTES];
-} SecureMetadata;
 
 typedef struct {
     uint32_t magic;
@@ -29,14 +16,13 @@ typedef struct {
     unsigned char iv[IV_SIZE];
 } MetadataHeader;
 
-
-
 // Function declarations
 int save_metadata(const SecureMetadata* metadata);
 int load_metadata(const char* token, SecureMetadata* metadata);
 int validate_metadata(const SecureMetadata* metadata, const unsigned char* master_key);
 int encrypt_metadata(const SecureMetadata* metadata, const unsigned char* key, const char* filepath);
 int decrypt_metadata(const char* filepath, const unsigned char* key, SecureMetadata* metadata);
+
 
 
 int save_metadata(const SecureMetadata* metadata) {
