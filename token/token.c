@@ -39,18 +39,8 @@
 #include "file_ops.h"
 #include "types.h"
 
-// Configuration constants
-#define MAX_FAILED_ATTEMPTS 3
-#define OPERATION_TIMEOUT_SECONDS 300
-#define MIN_TOKEN_LENGTH 32
-#define MAX_PATH_LENGTH 4096
-#define SECURE_PERMISSIONS 0600
-#define LOG_BUFFER_SIZE 1024
-
-// Rate limiting
-#define RATE_LIMIT_INTERVAL 60  // seconds
-#define MAX_OPERATIONS_PER_INTERVAL 10
-
+extern int g_debug_mode;
+extern int g_silent_mode;
 
 // Secure operation context
 typedef struct {
@@ -64,6 +54,11 @@ char* g_custom_key_path = NULL;
 static SecurityContext* g_security_context = NULL;
 static volatile sig_atomic_t g_shutdown_flag = 0;
 
+// Forward Declarations
+void log_security_event(const char* event, const char* details);
+static int verify_decryption_prerequisites(const SecureMetadata* metadata, const char* token);
+static int validate_key_path(const char* path);
+
 // Function declarations
 static void initialize_security_context(void);
 static void cleanup_security_context(void);
@@ -75,7 +70,7 @@ static ErrorCode validate_storage_path(const char* path);
 static ErrorCode validate_output_path(const char* path);
 
 static ErrorCode check_rate_limit(void);
-
+static ErrorCode verify_decryption_prerequisites(const SecureMetadata* metadata, const char* token);
 static ErrorCode handle_retrieve_file(void* args);
 static ErrorCode perform_operation_with_timeout(operation_func func, void* args);
 
@@ -85,7 +80,7 @@ ErrorCode handle_store_file(void* args);
 void secure_wipe(void* ptr, size_t len);
 static void* secure_malloc(size_t size);
 static void handle_interrupt(int signal);
-static void log_security_event(const char* event, const char* details);
+
 
 static void cleanup_security_context(void) {
     if (g_security_context) {
@@ -95,8 +90,17 @@ static void cleanup_security_context(void) {
     }
 }
 
+// Help funcs
+int is_debug_mode() {
+    return g_debug_mode;
+}
+
+int is_silent_mode() {
+    return g_silent_mode;
+}
 
 ErrorCode handle_retrieve_file(void* args) {
+    ErrorCode ret = SUCCESS;
     if (!args) return ERROR_INVALID_INPUT;
     
     RetrieveFileArgs* retrieve_args = (RetrieveFileArgs*)args;
@@ -111,11 +115,18 @@ ErrorCode handle_retrieve_file(void* args) {
         return ERROR_SYSTEM;
     }
     
-    // Decrypt file
-    if (decrypt_file_chunked(retrieve_args->output_path, 
-                           retrieve_args->key, 
-                           retrieve_args->metadata) != 0) {
-        return ERROR_CRYPTO;
+    // Verify prerequisites and decrypt file
+    if ((ret = verify_decryption_prerequisites(retrieve_args->metadata, 
+                                             retrieve_args->token)) != SUCCESS) {
+        log_security_event("ERROR", "Invalid or corrupted data");
+        return ret;
+    }
+
+    if ((ret = decrypt_file_chunked(retrieve_args->output_path, 
+                                  retrieve_args->key, 
+                                  retrieve_args->metadata,retrieve_args->token)) != SUCCESS) {
+        log_security_event("ERROR", "Decryption failed");
+        return ret;
     }
     
     return SUCCESS;
@@ -127,7 +138,7 @@ ErrorCode handle_retrieve_file(void* args) {
 static void initialize_security_context(void) {
     g_security_context = secure_malloc(sizeof(SecurityContext));
     if (!g_security_context) {
-        fprintf(stderr, "Failed to initialize security context\n");
+        fprintf(stderr,!DEBUG ? "" : "Failed to initialize security context\n");
         exit(ERROR_SYSTEM);
     }
 
@@ -160,7 +171,7 @@ static ErrorCode validate_input_parameters(int argc, char* argv[]) {
     if (argc < 2) return ERROR_INVALID_INPUT;
     
     for (int i = 1; i < argc; i++) {
-        if (!argv[i] || strlen(argv[i]) > MAX_PATH_LENGTH) {
+        if (!argv[i] || strlen(argv[i]) > MAX_PATH_LEN) {
             return ERROR_INVALID_INPUT;
         }
         
@@ -178,7 +189,7 @@ static ErrorCode validate_input_parameters(int argc, char* argv[]) {
  * @brief Validates file path for security issues
  */
 static ErrorCode validate_path(const char* path) {
-    if (!path || strlen(path) > MAX_PATH_LENGTH) {
+    if (!path || strlen(path) > MAX_PATH_LEN) {
         return ERROR_INVALID_INPUT;
     }
 
@@ -215,27 +226,27 @@ static ErrorCode validate_path(const char* path) {
 
     // Ensure resolved path matches the expected secure storage directory
     if (strstr(path, "secure_storage/")) {
-        fprintf(stderr, "DEBUG: Input path contains 'secure_storage/'\n");
-        fprintf(stderr, "DEBUG: Input path: '%s'\n", path);
-        fprintf(stderr, "DEBUG: Resolved path: '%s'\n", resolved_path);
-        fprintf(stderr, "DEBUG: Expected resolved storage path: '%s'\n", resolved_storage_path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Input path contains 'secure_storage/'\n");
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Input path: '%s'\n", path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Resolved path: '%s'\n", resolved_path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Expected resolved storage path: '%s'\n", resolved_storage_path);
 
         if (strncmp(resolved_path, resolved_storage_path, strlen(resolved_storage_path)) != 0) {
-            fprintf(stderr, "DEBUG: strncmp failed. Comparison result: %d\n", 
+            fprintf(stderr,!DEBUG ? "" : "DEBUG: strncmp failed. Comparison result: %d\n", 
                     strncmp(resolved_path, resolved_storage_path, strlen(resolved_storage_path)));
             log_security_event("SECURITY_VIOLATION", "Path validation failed");
             return ERROR_INVALID_INPUT;
         }
     } else {
-        fprintf(stderr, "DEBUG: Input path does not contain 'secure_storage/'\n");
-        fprintf(stderr, "DEBUG: Input path: '%s'\n", path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Input path does not contain 'secure_storage/'\n");
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Input path: '%s'\n", path);
     }
 
     return SUCCESS;
 }
 
 static ErrorCode validate_storage_path(const char* path) {
-    if (!path || strlen(path) > MAX_PATH_LENGTH) {
+    if (!path || strlen(path) > MAX_PATH_LEN) {
         return ERROR_INVALID_INPUT;
     }
 
@@ -255,9 +266,9 @@ static ErrorCode validate_storage_path(const char* path) {
 
     // Check if path is within allowed directories
     if (strncmp(resolved_path, resolved_storage_path, strlen(resolved_storage_path)) != 0) {
-        fprintf(stderr, "DEBUG: Resolved path: '%s'\n", resolved_path);
-        fprintf(stderr, "DEBUG: Expected resolved storage path: '%s'\n", resolved_storage_path);
-        fprintf(stderr, "DEBUG: Comparison result: %d\n", 
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Resolved path: '%s'\n", resolved_path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Expected resolved storage path: '%s'\n", resolved_storage_path);
+        fprintf(stderr,!DEBUG ? "" : "DEBUG: Comparison result: %d\n", 
                 strncmp(resolved_path, resolved_storage_path, strlen(resolved_storage_path)));
 
         log_security_event("SECURITY_VIOLATION", "Path validation failed");
@@ -268,7 +279,7 @@ static ErrorCode validate_storage_path(const char* path) {
 }
 
 static ErrorCode validate_output_path(const char* path) {
-    if (!path || strlen(path) > MAX_PATH_LENGTH) {
+    if (!path || strlen(path) > MAX_PATH_LEN) {
         return ERROR_INVALID_INPUT;
     }
 
@@ -322,15 +333,14 @@ static ErrorCode check_rate_limit(void) {
 /**
  * @brief Securely wipes memory containing sensitive data
  */
-void secure_wipe(void* ptr, size_t len) {
-    if (!ptr || len == 0) return;
-    
-    volatile unsigned char* p = ptr;
+void secure_wipe(void *ptr, size_t len) {
+    volatile unsigned char *volatile p = (volatile unsigned char *volatile)ptr;
     while (len--) {
         *p++ = 0;
     }
     __sync_synchronize();
 }
+
 
 /**
  * @brief Handles program interruption
@@ -343,7 +353,9 @@ static void handle_interrupt(int signal __attribute__((unused))) {
 /**
  * @brief Logs security events with timestamps
  */
-static void log_security_event(const char* event, const char* details) {
+void log_security_event(const char* event, const char* details) {
+	
+	if(DEBUG){
     time_t now = time(NULL);
     char timestamp[26];
     ctime_r(&now, timestamp);
@@ -352,11 +364,11 @@ static void log_security_event(const char* event, const char* details) {
     char log_buffer[LOG_BUFFER_SIZE];
     snprintf(log_buffer, sizeof(log_buffer), "[%s] %s: %s", 
              timestamp, event, details);
-
+	
     // In production, this should write to a secure log facility
     fprintf(stderr, "%s\n", log_buffer);
+	}
 }
-
 /**
  * @brief Performs operation with timeout control
  */
@@ -399,22 +411,122 @@ static void cleanup_secure(void) {
     munlockall();
 }
 
-int main(int argc, char* argv[]) {
-	
-	// before anything
-	if (argc < 2) {
-    printf(HELP_TEXT, argv[0], argv[0], argv[0], argv[0]);
-    return ERROR_INVALID_INPUT;
-	}
-	
-    ErrorCode ret = SUCCESS;
-    SecurityError error = {0};
-    char** chunk_paths = NULL;
-    char* token = NULL;
-    size_t chunk_count = 0;
-	
-	
+// Argument parsing structure
+typedef struct {
+    char* command;
+    char* filepath;
+    char* token;
+    char* output_path;
+    char* key_path;
+    int is_debug;
+    int is_silent;
+} ParsedArgs;
 
+
+
+// Function to parse arguments flexibly
+ErrorCode parse_arguments(int argc, char* argv[], ParsedArgs* parsed_args) {
+    // Reset global flags first
+    g_debug_mode = 0;
+    g_silent_mode = 0;
+
+    // Initialize all fields to NULL or 0
+    memset(parsed_args, 0, sizeof(ParsedArgs));
+    
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0) {
+            parsed_args->is_debug = 1;
+            g_debug_mode = 1;  // Set global debug flag
+            continue;
+        }
+        
+        if (strcmp(argv[i], "--silent") == 0) {
+            parsed_args->is_silent = 1;
+            g_silent_mode = 1;  // Set global silent flag
+            continue;
+        }
+        
+        if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+            parsed_args->key_path = argv[++i];
+            continue;
+        }
+        
+        // Check for known commands
+        if (strcmp(argv[i], "store") == 0 || 
+            strcmp(argv[i], "retrieve") == 0 || 
+            strcmp(argv[i], "generate-key") == 0) {
+            parsed_args->command = argv[i];
+            continue;
+        }
+        
+        // If no command set yet, assume this is the first argument for the command
+        if (!parsed_args->filepath && !parsed_args->token) {
+            if (parsed_args->command) {
+                if (strcmp(parsed_args->command, "store") == 0) {
+                    parsed_args->filepath = argv[i];
+                } else if (strcmp(parsed_args->command, "retrieve") == 0) {
+                    parsed_args->token = argv[i];
+                } else if (strcmp(parsed_args->command, "generate-key") == 0) {
+                    parsed_args->filepath = argv[i];
+                }
+            }
+            continue;
+        }
+        
+        // If token is set, next argument is output path for retrieve
+        if (parsed_args->token) {
+            parsed_args->output_path = argv[i];
+        }
+    }
+    
+    // Validate parsed arguments based on command
+    if (!parsed_args->command) {
+        fprintf(stderr, "Error: No command specified.\n");
+        printf(HELP_TEXT, argv[0]);
+        return ERROR_INVALID_INPUT;
+    }
+    
+    if (strcmp(parsed_args->command, "store") == 0 && !parsed_args->filepath) {
+        fprintf(stderr, "Error: Filepath required for store command.\n");
+        return ERROR_INVALID_INPUT;
+    }
+    
+    if (strcmp(parsed_args->command, "retrieve") == 0 && 
+        (!parsed_args->token || !parsed_args->output_path)) {
+        fprintf(stderr, "Error: Token and output path required for retrieve command.\n");
+        return ERROR_INVALID_INPUT;
+    }
+    
+    if (strcmp(parsed_args->command, "generate-key") == 0 && !parsed_args->filepath) {
+        fprintf(stderr, "Error: Output path required for generate-key command.\n");
+        return ERROR_INVALID_INPUT;
+    }
+    
+    return SUCCESS;
+}
+
+//Flexible Arg Parsing
+int main(int argc, char* argv[]) {
+    // Before anything
+    if (argc < 2) {
+        printf(HELP_TEXT, argv[0]);
+        return ERROR_INVALID_INPUT;
+    }
+    
+    ParsedArgs parsed_args = {0};
+    ErrorCode ret = parse_arguments(argc, argv, &parsed_args);
+    if (ret != SUCCESS) {
+        return ret;
+    }
+    
+    // Override debug and silent macros if flags are set
+    #undef DEBUG
+    #undef SILENT
+    #define DEBUG parsed_args.is_debug
+    #define SILENT parsed_args.is_silent
+    
+    ErrorCode result = SUCCESS;
+    
     // Set up signal handlers
     signal(SIGINT, handle_interrupt);
     signal(SIGTERM, handle_interrupt);
@@ -426,12 +538,6 @@ int main(int argc, char* argv[]) {
     if (atexit(cleanup_secure) != 0) {
         log_security_event("FATAL", "Failed to register cleanup handler");
         return ERROR_SYSTEM;
-    }
-
-    // Validate input parameters
-    if ((ret = validate_input_parameters(argc, argv)) != SUCCESS) {
-        fprintf(stderr, "Invalid input parameters\n");
-        return ret;
     }
 
     // Initialize OpenSSL
@@ -457,46 +563,32 @@ int main(int argc, char* argv[]) {
         return ret;
     }
 
-    // Handle commands
-    if (strcmp(argv[1], "generate-key") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "Error: Path required for key generation\n");
-            return ERROR_INVALID_INPUT;
-        }
-        return generate_key_file(argv[2]);
-    }
+    // Reusable variables for store and retrieve
+    char* token = NULL;
+    char** chunk_paths = NULL;
+    size_t chunk_count = 0;
+    unsigned char key[KEY_SIZE] = {0};
 
-    // Parse and validate key path
-    char* key_path = NULL;
-    for (int i = 1; i < argc - 1; i++) {
-        if (strcmp(argv[i], "--key") == 0) {
-            key_path = argv[i + 1];
-            if ((ret = validate_path(key_path)) != SUCCESS) {  // Changed from validate_storage_path
-                return ret;
-            }
-            break;
-        }
-    }
+    // Determine key path
+    char* key_path = parsed_args.key_path;
 
     // Initialize encryption key
-    unsigned char key[KEY_SIZE];
-    if (handle_key_initialization(key, key_path) != SUCCESS) {
+    if ((ret = handle_key_initialization(key, key_path)) != SUCCESS) {
         log_security_event("ERROR", "Key initialization failed");
         return ERROR_CRYPTO;
     }
 
-    // Handle store command
-    if (strcmp(argv[1], "store") == 0) {
-        if (argc < 3) {
-            fprintf(stderr, "Error: File path required for storage\n");
-            return ERROR_INVALID_INPUT;
-        }
-
+    // Handle commands based on parsed arguments
+    if (strcmp(parsed_args.command, "generate-key") == 0) {
+        result = generate_key_file(parsed_args.filepath);
+    }
+    else if (strcmp(parsed_args.command, "store") == 0) {
+        // Reuse original store command logic
         // Generate secure token
         token = generate_token();
-        if (!token || strlen(token) < MIN_TOKEN_LENGTH) {
+        if (!token || strlen(token) < MIN_TOKEN_LEN) {
             log_security_event("ERROR", "Token generation failed");
-            ret = ERROR_CRYPTO;
+            result = ERROR_CRYPTO;
             goto cleanup;
         }
 
@@ -506,7 +598,7 @@ int main(int argc, char* argv[]) {
 
         // Store file with timeout control
         StoreFileArgs args = {
-            .filepath = argv[2],
+            .filepath = parsed_args.filepath,
             .chunk_paths = &chunk_paths,
             .chunk_count = &chunk_count,
             .token = token,
@@ -515,76 +607,74 @@ int main(int argc, char* argv[]) {
         };
 
         if ((ret = perform_operation_with_timeout(handle_store_file, &args)) != SUCCESS) {
+            printf(!DEBUG ? "" :"Store operation failed with ret=%d\n", ret);
+            result = ret;
             goto cleanup;
         }
 
         metadata.data_size = original_file_size;
-        strncpy(metadata.original_filename, basename(argv[2]), 
+        strncpy(metadata.original_filename, basename(parsed_args.filepath), 
                 sizeof(metadata.original_filename) - 1);
 
-        printf("Encrypting file in chunks...\n");
-        if (encrypt_file_secure(argv[2], chunk_paths, chunk_count, key, 
-                              &metadata, &error) == SUCCESS) {
-            printf("Saving metadata...\n");
+        if (!chunk_paths || chunk_count == 0) {
+            log_security_event("ERROR", "Chunk paths not properly initialized");
+            result = ERROR_CRYPTO;
+            goto cleanup;
+        }
+
+        if (encrypt_file_chunked(parsed_args.filepath, &chunk_paths, &chunk_count, key, &metadata) == SUCCESS) {
             if (save_metadata(&metadata) == SUCCESS) {
-                printf("\nFile encrypted successfully in %zu chunks.\n", chunk_count);
-                printf("Token: %s\n", token);
-                printf("Keep this token safe - you'll need it to retrieve your file.\n");
+                printf(SILENT ? "" : "Token:");
+                printf("%s\n",token);
+                printf(SILENT ? "" : "Keep this token safe - you'll need it to retrieve your file.\n");
                 
                 log_security_event("SUCCESS", "File stored successfully");
             } else {
                 log_security_event("ERROR", "Failed to save metadata");
-                ret = ERROR_SYSTEM;
+                result = ERROR_SYSTEM;
             }
         } else {
-            log_security_event("ERROR", error.message);
-            ret = ERROR_CRYPTO;
+            log_security_event("ERROR", "File encryption failed");
+            result = ERROR_CRYPTO;
         }
     }
-    // Handle retrieve command
-	else if (strcmp(argv[1], "retrieve") == 0) {
-		if (argc < 4) {
-			fprintf(stderr, "Error: Token and output path required for retrieval\n");
-			ret = ERROR_INVALID_INPUT;
-			goto cleanup;
-		}
+    else if (strcmp(parsed_args.command, "retrieve") == 0) {
+        // Reuse original retrieve command logic
+        if ((ret = validate_output_path(parsed_args.output_path)) != SUCCESS) {
+            fprintf(stderr,!DEBUG ? "" : "Error: Could not create output directory\n");
+            result = ret;
+            goto cleanup;
+        }
 
-		char* token = argv[2];
-		char* output_path = argv[3];
+        // Load metadata using the provided token
+        SecureMetadata metadata = {0};
+        if ((ret = load_metadata(parsed_args.token, &metadata)) != SUCCESS) {
+            fprintf(stderr,!DEBUG ? "" : "Error: Could not load metadata. Token might be invalid.\n");
+            result = ret;
+            goto cleanup;
+        }
 
-		if ((ret = validate_output_path(output_path)) != SUCCESS) {
-			fprintf(stderr, "Error: Could not create output directory\n");
-			goto cleanup;
-		}
+        // Extract the token from the metadata
+        char extracted_token[TOKEN_SIZE]; 
+        strncpy(extracted_token, metadata.token, TOKEN_SIZE);
 
-		printf("\nStarting file retrieval process...\n");
-
-		// Load metadata using the provided token
-		SecureMetadata metadata = {0};
-		if ((ret = load_metadata(token, &metadata)) != SUCCESS) {
-			fprintf(stderr, "Error: Could not load metadata. Token might be invalid.\n");
-			goto cleanup;
-		}
-
-		// Attempt to decrypt the file using the loaded metadata and key
-		printf("Decrypting file in chunks...\n");
-		if ((ret = decrypt_file_chunked(output_path, key, &metadata)) == SUCCESS) {
-			printf("\nFile retrieved successfully.\n");
-			log_security_event("SUCCESS", "File retrieved successfully");
-		} else {
-			fprintf(stderr, "Error: Decryption failed. Attempting recovery...\n");
-			if ((ret = handle_decryption_failure(key, token, output_path)) == SUCCESS) {
-				printf("\nFile retrieved successfully using fallback key.\n");
-				log_security_event("SUCCESS", "File retrieved successfully with fallback key");
-			} else {
-				fprintf(stderr, "\nDecryption failed with all attempted keys.\n");
-				log_security_event("ERROR", "File retrieval failed");
-				goto cleanup;
-			}
-		}
-	}
-
-
+        // Attempt to decrypt the file
+        if ((ret = decrypt_file_chunked(parsed_args.output_path, key, &metadata, extracted_token)) == SUCCESS) {
+            printf("\nFile retrieved successfully.\n");
+            log_security_event("SUCCESS", "File retrieved successfully");
+        } else {
+            fprintf(stderr,!DEBUG ? "" : "Error: Decryption failed. Attempting recovery...\n");
+            if ((ret = handle_decryption_failure(key, parsed_args.token, parsed_args.output_path)) == SUCCESS) {
+                printf("\nFile retrieved successfully using fallback key.\n");
+                log_security_event("SUCCESS", "File retrieved successfully with fallback key");
+            } else {
+                fprintf(stderr,!DEBUG ? "" : "\nDecryption failed with all attempted keys.\n");
+                log_security_event("ERROR", "File retrieval failed");
+                result = ret;
+                goto cleanup;
+            }
+        }
+    }
 
 cleanup:
     // Secure cleanup of sensitive data
@@ -605,5 +695,5 @@ cleanup:
 
     secure_wipe(key, KEY_SIZE);
     
-    return ret;
+    return result;
 }

@@ -45,3 +45,4 @@ typedef struct {
 } RetrieveFileArgs;
 
 #endif // TYPES_H
+
