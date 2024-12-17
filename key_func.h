@@ -49,15 +49,7 @@ void generate_master_key() {
     }
     printf("\n");
 
-    FILE *file = fopen(master_key_file, "wb");
-    if (file == NULL) {
-        fprintf(stderr, "Error: Unable to open master key file for writing.\n");
-        exit(1);
-    }
-    fwrite(new_master_key, 1, KEY_SIZE, file);
-    fclose(file);
-
-    printf("WARNING: The master key has been stored in %s. This is insecure and should only be used for educational purposes.\n", master_key_file);
+    // Removed implicit storing of master key
 }
 
 void load_master_key(const char *provided_key) {

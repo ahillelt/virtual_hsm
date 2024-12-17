@@ -144,6 +144,13 @@ int handle_arguments(int argc, char *argv[], CommandLineArgs* args) {
         i++;  // Move past the key name
     }
 
+    // Allow an additional argument for -generate_master_key
+    if (i < argc - 1 && strcmp(args->command, "-generate_master_key") == 0) {
+        if (strcmp(argv[i + 1], "store_key") == 0) {
+            i++; // Move past the "store_key" argument
+        }
+    }
+
     // Parse remaining arguments
     for (; i < argc; i++) {
         if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {

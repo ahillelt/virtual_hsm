@@ -49,7 +49,6 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Debug: Starting virtual_hsm\n");
     
     CommandLineArgs args;
-    
     if (!handle_arguments(argc, argv, &args)) {
         return 1;
     }
@@ -59,6 +58,20 @@ int main(int argc, char *argv[]) {
     // Handle generate_master_key command before trying to load the master key
     if (strcmp(args.command, "-generate_master_key") == 0) {
         generate_master_key();
+
+        // Check for the "store_key" argument
+        if (argc > 2 && strcmp(argv[2], "store_key") == 0) {
+            // Store the generated master key in master_key_file
+            FILE *file = fopen(master_key_file, "wb");
+            if (file == NULL) {
+                fprintf(stderr, "Error: Unable to open master key file for writing.\n");
+                exit(1);
+            }
+            fwrite(master_key, 1, KEY_SIZE, file);
+            fclose(file);
+            printf("Master key stored in %s\n", master_key_file);
+        }
+
         return 0;
     }
 
