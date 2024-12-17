@@ -79,10 +79,11 @@ void print_usage(void) {
     fprintf(stderr, "    -list                       List all stored key names\n");
     fprintf(stderr, "                                Example: ./virtual_hsm -list -o keys.txt\n\n");
     
-    fprintf(stderr, "  Master Key Operations:\n");
-    fprintf(stderr, "    -generate_master_key        Generate a new master key\n");
-    fprintf(stderr, "                                Example: ./virtual_hsm -generate_master_key -o master.key\n\n");
-    
+	fprintf(stderr, "  Master Key Operations:\n");
+	fprintf(stderr, "    -generate_master_key        Generate a new master key\n");
+	fprintf(stderr, "                                Example (without storing): ./virtual_hsm -generate_master_key\n");
+	fprintf(stderr, "                                Example (with storing):  ./virtual_hsm -generate_master_key store_key\n\n");
+		
     fprintf(stderr, "  Asymmetric Key Operations:\n");
     fprintf(stderr, "    -generate_key_pair <name>   Generate ED25519 key pair\n");
     fprintf(stderr, "                                Creates both <name> (private) and <name>_public\n\n");
