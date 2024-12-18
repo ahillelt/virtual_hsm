@@ -83,6 +83,14 @@ KeyPair *find_key_pair(const char *name) {
 
 // Generate a new Ed25519 key pair and store it in the HSM
 int generate_key_pair(const char *name) {
+	 // Check if a key with the same name already exists
+    for (int i = 0; i < key_count; i++) {
+        if (strcmp(keystore[i].name, name) == 0) {
+            fprintf(stderr, "Duplicate Name, Cannot generate\n");
+            return 0; // Indicate failure
+        }
+    }
+	
     EVP_PKEY *pkey = NULL;
     EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, NULL);
     

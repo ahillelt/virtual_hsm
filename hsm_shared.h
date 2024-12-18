@@ -11,6 +11,7 @@ typedef struct {
     unsigned char tag[TAG_SIZE];
     int encrypted_len;
     int is_public_key;
+	unsigned char master_key_hash[MASTER_KEY_HASH_SIZE];
 } KeyEntry;
 
 // External declarations for shared variables

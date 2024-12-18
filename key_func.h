@@ -197,10 +197,14 @@ void store_key(const char *name, const unsigned char *key, int is_public_key) {
         exit(1);
     }
 
+	
     KeyEntry *entry = &keystore[key_count++];
     strncpy(entry->name, name, MAX_NAME_LENGTH);
     entry->name[MAX_NAME_LENGTH] = '\0';
     entry->is_public_key = is_public_key;
+
+
+
 
     if (is_public_key) {
         memcpy(entry->key_data, key, KEY_SIZE);
@@ -213,6 +217,11 @@ void store_key(const char *name, const unsigned char *key, int is_public_key) {
             exit(1);
         }
     }
+	
+	// Compute and store master key hash
+    unsigned char master_key_hash[MASTER_KEY_HASH_SIZE];
+    SHA256(master_key, KEY_SIZE, master_key_hash); // Assuming SHA256 hash
+    memcpy(entry->master_key_hash, master_key_hash, MASTER_KEY_HASH_SIZE);
     
     save_keystore();
     DEBUG_PRINT("Key stored successfully");
@@ -282,8 +291,14 @@ void retrieve_key(const char *name) {
 }
 
 void list_keys() {
+    unsigned char current_master_key_hash[MASTER_KEY_HASH_SIZE];
+    SHA256(master_key, KEY_SIZE, current_master_key_hash); // Assuming SHA256 hash
+
     for (int i = 0; i < key_count; i++) {
-        printf("%s\n", keystore[i].name);
+        if (memcmp(current_master_key_hash, keystore[i].master_key_hash, MASTER_KEY_HASH_SIZE) == 0) {
+            // Hash matches, display the key name
+            printf("%s\n", keystore[i].name);
+        }
     }
 }
 

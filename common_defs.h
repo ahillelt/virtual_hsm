@@ -8,6 +8,7 @@
 #define IV_SIZE 12  
 #define TAG_SIZE 16
 
+#define MASTER_KEY_HASH_SIZE 32 // Assuming SHA256 hash
 
 // Encryption variables
 #define PEM_KEY_CHAR_ARR_SIZE 4096

@@ -10,6 +10,7 @@
 #include <openssl/err.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <openssl/sha.h>
 
 #include "common_defs.h"
 #include "digital_signature.h"
