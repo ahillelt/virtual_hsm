@@ -51,16 +51,23 @@ jobs:
     - name: Run crypto tests
       run: |
         echo "=== Running Crypto Tests ==="
+        ls -la bin/ || { echo "ERROR: bin directory not found"; exit 1; }
+        test -f bin/test_crypto || { echo "ERROR: bin/test_crypto not found"; ls -la bin/; exit 1; }
+        test -x bin/test_crypto || { echo "ERROR: bin/test_crypto not executable"; chmod +x bin/test_crypto; }
         ./bin/test_crypto || exit 1
 
     - name: Run homomorphic encryption tests
       run: |
         echo "=== Running Homomorphic Encryption Tests ==="
+        test -f bin/test_homomorphic || { echo "ERROR: bin/test_homomorphic not found"; exit 1; }
+        test -x bin/test_homomorphic || chmod +x bin/test_homomorphic
         ./bin/test_homomorphic || exit 1
 
     - name: Run integration tests
       run: |
         echo "=== Running Integration Tests ==="
+        test -f bin/test_integration || { echo "ERROR: bin/test_integration not found"; exit 1; }
+        test -x bin/test_integration || chmod +x bin/test_integration
         ./bin/test_integration || exit 1
 
     - name: Build all binaries
