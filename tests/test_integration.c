@@ -1,5 +1,6 @@
 #include "vhsm.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
@@ -9,17 +10,22 @@
 int test_full_workflow() {
     printf("Testing full HSM workflow...\n");
 
+    /* Clean and create storage directory */
+    system("rm -rf ./test_integration_storage");
+    system("mkdir -p ./test_integration_storage");
+
     vhsm_ctx_t ctx = NULL;
     vhsm_session_t admin_session = NULL, user_session = NULL;
     vhsm_error_t err;
 
-    /* Step 1: Initialize */
-    err = vhsm_init();
-    assert(err == VHSM_SUCCESS || err == VHSM_ERROR_ALREADY_INITIALIZED);
+    /* Step 1: Initialize (already done in main) */
 
     /* Step 2: Create context */
     err = vhsm_ctx_create(&ctx, "./test_integration_storage");
-    assert(err == VHSM_SUCCESS);
+    if (err != VHSM_SUCCESS) {
+        printf("  FAIL: Context creation failed\n");
+        return 0;
+    }
 
     /* Step 3: Generate master key */
     uint8_t master_key[32];
@@ -138,7 +144,7 @@ cleanup:
         vhsm_audit_disable(ctx);
         vhsm_ctx_destroy(ctx);
     }
-    vhsm_cleanup();
+    /* Note: vhsm_cleanup() is called once in main() at the end */
 
     printf("  PASS\n\n");
     return 1;
@@ -147,12 +153,19 @@ cleanup:
 int test_password_change() {
     printf("Testing password change...\n");
 
+    /* Clean and create storage directory */
+    system("rm -rf ./test_pwd_storage");
+    system("mkdir -p ./test_pwd_storage");
+
     vhsm_ctx_t ctx = NULL;
     vhsm_session_t session = NULL;
     vhsm_error_t err;
 
     err = vhsm_ctx_create(&ctx, "./test_pwd_storage");
-    assert(err == VHSM_SUCCESS);
+    if (err != VHSM_SUCCESS) {
+        printf("  FAIL: Context creation failed with error: %s\n", vhsm_error_string(err));
+        return 0;
+    }
 
     uint8_t master_key[32];
     err = vhsm_ctx_generate_master_key(ctx, master_key);
@@ -168,7 +181,11 @@ int test_password_change() {
 
     /* Login with old password */
     err = vhsm_session_login(ctx, &session, "changetest", "oldpass", NULL);
-    assert(err == VHSM_SUCCESS);
+    if (err != VHSM_SUCCESS) {
+        printf("  FAIL: Initial login failed with error: %s\n", vhsm_error_string(err));
+        vhsm_ctx_destroy(ctx);
+        return 0;
+    }
     vhsm_session_logout(session);
 
     /* Change password */
@@ -194,12 +211,19 @@ int test_password_change() {
 int test_concurrent_sessions() {
     printf("Testing concurrent sessions...\n");
 
+    /* Clean and create storage directory */
+    system("rm -rf ./test_concurrent_storage");
+    system("mkdir -p ./test_concurrent_storage");
+
     vhsm_ctx_t ctx = NULL;
     vhsm_session_t session1 = NULL, session2 = NULL;
     vhsm_error_t err;
 
     err = vhsm_ctx_create(&ctx, "./test_concurrent_storage");
-    assert(err == VHSM_SUCCESS);
+    if (err != VHSM_SUCCESS) {
+        printf("  FAIL: Context creation failed\n");
+        return 0;
+    }
 
     uint8_t master_key[32];
     err = vhsm_ctx_generate_master_key(ctx, master_key);
@@ -240,6 +264,13 @@ int test_concurrent_sessions() {
 int main(void) {
     printf("=== Virtual HSM Integration Tests ===\n\n");
 
+    /* Initialize library once for all tests */
+    vhsm_error_t err = vhsm_init();
+    if (err != VHSM_SUCCESS && err != VHSM_ERROR_ALREADY_INITIALIZED) {
+        printf("FATAL: Failed to initialize VHSM library\n");
+        return 1;
+    }
+
     int passed = 0;
     int total = 0;
 
@@ -248,6 +279,8 @@ int main(void) {
     total++; if (test_concurrent_sessions()) passed++;
 
     printf("=== Test Results: %d/%d passed ===\n", passed, total);
+
+    vhsm_cleanup();
 
     return (passed == total) ? 0 : 1;
 }

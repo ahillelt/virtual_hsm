@@ -44,10 +44,16 @@ cli: $(CLI_BIN)
 server: $(SERVER_BIN)
 
 # Create directories
-$(BUILD_DIR) $(LIB_DIR) $(BIN_DIR):
+$(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/core $(BUILD_DIR)/auth $(BUILD_DIR)/storage $(BUILD_DIR)/crypto $(BUILD_DIR)/audit $(BUILD_DIR)/utils:
+$(LIB_DIR):
+	mkdir -p $@
+
+$(BIN_DIR):
+	mkdir -p $@
+
+$(BUILD_DIR)/core $(BUILD_DIR)/auth $(BUILD_DIR)/storage $(BUILD_DIR)/crypto $(BUILD_DIR)/audit $(BUILD_DIR)/utils: | $(BUILD_DIR)
 	mkdir -p $@
 
 # Build object files
@@ -55,28 +61,33 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)/core $(BUILD_DIR)/auth $(BUILD_D
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Build static library
-$(STATIC_LIB): $(LIB_OBJS) | $(LIB_DIR)
+$(STATIC_LIB): $(LIB_OBJS)
+	@mkdir -p $(LIB_DIR)
 	ar rcs $@ $^
 	@echo "Static library created: $@"
 
 # Build shared library
-$(SHARED_LIB): $(LIB_OBJS) | $(LIB_DIR)
+$(SHARED_LIB): $(LIB_OBJS)
+	@mkdir -p $(LIB_DIR)
 	$(CC) -shared -o $@ $^ $(LDFLAGS)
 	@echo "Shared library created: $@"
 
 # Build CLI
-$(CLI_BIN): cli/vhsm_cli.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(CLI_BIN): cli/vhsm_cli.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "CLI built: $@"
 
 # Build server
-$(SERVER_BIN): server/vhsm_server.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(SERVER_BIN): server/vhsm_server.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "Server built: $@"
 
 # Build TLS server
-$(SERVER_TLS_BIN): server/vhsm_server_tls.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(SERVER_TLS_BIN): server/vhsm_server_tls.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "TLS server built: $@"
 
 server-tls: $(SERVER_TLS_BIN)
@@ -84,20 +95,23 @@ server-tls: $(SERVER_TLS_BIN)
 # Build examples
 examples: $(STATIC_LIB)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(CFLAGS) examples/basic_usage.c -o $(BIN_DIR)/example_basic -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+	$(CC) $(CFLAGS) examples/basic_usage.c -o $(BIN_DIR)/example_basic $(STATIC_LIB) $(LDFLAGS)
 	@echo "Examples built"
 
 # Build tests
-$(TEST_CRYPTO_BIN): tests/test_crypto.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(TEST_CRYPTO_BIN): tests/test_crypto.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "Crypto tests built: $@"
 
-$(TEST_HE_BIN): tests/test_homomorphic.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(TEST_HE_BIN): tests/test_homomorphic.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "Homomorphic tests built: $@"
 
-$(TEST_INTEGRATION_BIN): tests/test_integration.c $(STATIC_LIB) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ -L$(LIB_DIR) -lvhsm $(LDFLAGS)
+$(TEST_INTEGRATION_BIN): tests/test_integration.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "Integration tests built: $@"
 
 test-crypto: $(TEST_CRYPTO_BIN)
