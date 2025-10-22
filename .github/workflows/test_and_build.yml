@@ -42,9 +42,17 @@ jobs:
         make lib 2>&1 | tee build_lib.log || { echo "ERROR: make lib failed"; cat build_lib.log; exit 1; }
         ls -la lib/ || echo "lib directory missing!"
 
-        echo "=== Step 3: make test binaries ==="
-        make bin/test_crypto bin/test_homomorphic bin/test_integration 2>&1 | tee build_tests.log || { echo "ERROR: make tests failed"; cat build_tests.log; exit 1; }
-        ls -la bin/ || echo "bin directory missing!"
+        echo "=== Step 3: Build test binaries ==="
+        # Build test binaries - targets are the file paths themselves
+        make bin/test_crypto bin/test_homomorphic bin/test_integration 2>&1 | tee build_tests.log || {
+          echo "ERROR: Building test binaries failed"
+          cat build_tests.log
+          exit 1
+        }
+
+        echo "=== Verifying test binaries were created ==="
+        ls -la bin/ || { echo "ERROR: bin directory missing!"; exit 1; }
+        ls -la bin/test_* || { echo "ERROR: No test binaries found!"; exit 1; }
 
         echo "=== Build completed successfully ==="
 
