@@ -1,0 +1,189 @@
+name: Virtual HSM - Test and Build
+
+on:
+  push:
+    branches: [ main, claude/refactor-virtual-hsm-* ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libssl-dev \
+          zlib1g-dev \
+          uuid-dev \
+          libsodium-dev
+
+    - name: Build library and tests
+      run: |
+        make clean
+        make lib
+        make test-crypto test-he test-integration
+
+    - name: Run crypto tests
+      run: |
+        echo "=== Running Crypto Tests ==="
+        ./bin/test_crypto || exit 1
+
+    - name: Run homomorphic encryption tests
+      run: |
+        echo "=== Running Homomorphic Encryption Tests ==="
+        ./bin/test_homomorphic || exit 1
+
+    - name: Run integration tests
+      run: |
+        echo "=== Running Integration Tests ==="
+        ./bin/test_integration || exit 1
+
+    - name: Build all binaries
+      run: |
+        make all
+
+    - name: Test CLI
+      run: |
+        echo "=== Testing CLI ==="
+        echo "init" | timeout 5 ./bin/vhsm || true
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          test_*.log
+          test_*_storage/
+          bin/test_*
+        if-no-files-found: warn
+
+  build:
+    name: Build All Components
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libssl-dev \
+          zlib1g-dev \
+          uuid-dev \
+          libsodium-dev
+
+    - name: Build everything
+      run: |
+        make clean
+        make all
+        make examples
+
+    - name: Verify build outputs
+      run: |
+        test -f lib/libvhsm.a || { echo "Static library missing"; exit 1; }
+        test -f lib/libvhsm.so || { echo "Shared library missing"; exit 1; }
+        test -f bin/vhsm || { echo "CLI missing"; exit 1; }
+        test -f bin/vhsm-server || { echo "Server missing"; exit 1; }
+        test -f bin/vhsm-server-tls || { echo "TLS server missing"; exit 1; }
+        test -f bin/example_basic || { echo "Example missing"; exit 1; }
+        echo "All binaries built successfully"
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: vhsm-linux-build
+        path: |
+          lib/
+          bin/
+          include/
+        if-no-files-found: error
+
+  security-scan:
+    name: Security Scanning
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run code security scan
+      run: |
+        # Simple security checks
+        echo "=== Checking for common security issues ==="
+
+        # Check for strcpy, sprintf, gets
+        if grep -r "strcpy\|sprintf\|gets" src/ include/ --exclude-dir=build; then
+          echo "WARNING: Found potentially unsafe functions"
+        fi
+
+        # Check for hardcoded secrets (basic check)
+        if grep -ri "password.*=.*[\"\']" src/ --exclude="*.md"; then
+          echo "WARNING: Possible hardcoded passwords found"
+        fi
+
+        echo "Basic security scan complete"
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check documentation
+      run: |
+        test -f README_V2.md || { echo "README_V2.md missing"; exit 1; }
+        test -f include/vhsm.h || { echo "API header missing"; exit 1; }
+        echo "Documentation files present"
+
+    - name: Validate API completeness
+      run: |
+        # Check that key API functions are declared
+        grep -q "vhsm_init" include/vhsm.h || { echo "Missing vhsm_init"; exit 1; }
+        grep -q "vhsm_ctx_create" include/vhsm.h || { echo "Missing vhsm_ctx_create"; exit 1; }
+        grep -q "vhsm_user_create" include/vhsm.h || { echo "Missing vhsm_user_create"; exit 1; }
+        grep -q "vhsm_key_generate" include/vhsm.h || { echo "Missing vhsm_key_generate"; exit 1; }
+        grep -q "vhsm_encrypt" include/vhsm.h || { echo "Missing vhsm_encrypt"; exit 1; }
+        echo "API declarations complete"
+
+  summary:
+    name: Test Summary
+    needs: [test, build, security-scan, documentation]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Check job status
+      run: |
+        echo "=== Test Suite Summary ==="
+        echo "Tests: ${{ needs.test.result }}"
+        echo "Build: ${{ needs.build.result }}"
+        echo "Security: ${{ needs.security-scan.result }}"
+        echo "Documentation: ${{ needs.documentation.result }}"
+
+        if [ "${{ needs.test.result }}" != "success" ]; then
+          echo "❌ Tests failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.build.result }}" != "success" ]; then
+          echo "❌ Build failed"
+          exit 1
+        fi
+
+        echo "✅ All checks passed"
