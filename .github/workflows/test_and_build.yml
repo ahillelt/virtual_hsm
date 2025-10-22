@@ -42,69 +42,30 @@ jobs:
         make lib 2>&1 | tee build_lib.log || { echo "ERROR: make lib failed"; cat build_lib.log; exit 1; }
         ls -la lib/ || echo "lib directory missing!"
 
-        echo "=== Step 3: Build test binaries ==="
-        # Build test binaries - targets are the file paths themselves
-        make bin/test_crypto bin/test_homomorphic bin/test_integration 2>&1 | tee build_tests.log || {
-          echo "ERROR: Building test binaries failed"
-          cat build_tests.log
+        echo "=== Step 3: Build and run test suites ==="
+        # Use test targets which build and run tests
+        echo "Running crypto tests..."
+        make test-crypto 2>&1 | tee test_crypto.log || {
+          echo "ERROR: Crypto tests failed"
+          cat test_crypto.log
           exit 1
         }
 
-        echo "=== Verifying test binaries were created ==="
-        ls -la bin/ || { echo "ERROR: bin directory missing!"; exit 1; }
-        ls -la bin/test_* || { echo "ERROR: No test binaries found!"; exit 1; }
-
-        echo "=== Build completed successfully ==="
-
-    - name: Run crypto tests
-      run: |
-        set -x
-        echo "=== Running Crypto Tests ==="
-        pwd
-        echo "Current directory contents:"
-        ls -la
-
-        echo "bin directory contents:"
-        ls -la bin/ || { echo "ERROR: bin directory not found"; exit 1; }
-
-        echo "Checking if bin/test_crypto exists..."
-        if [ ! -f bin/test_crypto ]; then
-          echo "ERROR: bin/test_crypto not found"
-          echo "Looking for test binaries:"
-          find . -name "test_*" -type f 2>/dev/null
-          exit 1
-        fi
-
-        echo "File info for bin/test_crypto:"
-        file bin/test_crypto
-        ls -l bin/test_crypto
-
-        echo "Checking if executable..."
-        if [ ! -x bin/test_crypto ]; then
-          echo "WARNING: bin/test_crypto not executable, fixing..."
-          chmod +x bin/test_crypto
-        fi
-
-        echo "Attempting to run bin/test_crypto..."
-        ./bin/test_crypto || {
-          echo "ERROR: Test execution failed with exit code: $?"
-          ldd bin/test_crypto || true
+        echo "Running homomorphic encryption tests..."
+        make test-he 2>&1 | tee test_he.log || {
+          echo "ERROR: Homomorphic encryption tests failed"
+          cat test_he.log
           exit 1
         }
 
-    - name: Run homomorphic encryption tests
-      run: |
-        echo "=== Running Homomorphic Encryption Tests ==="
-        test -f bin/test_homomorphic || { echo "ERROR: bin/test_homomorphic not found"; exit 1; }
-        test -x bin/test_homomorphic || chmod +x bin/test_homomorphic
-        ./bin/test_homomorphic || exit 1
+        echo "Running integration tests..."
+        make test-integration 2>&1 | tee test_integration.log || {
+          echo "ERROR: Integration tests failed"
+          cat test_integration.log
+          exit 1
+        }
 
-    - name: Run integration tests
-      run: |
-        echo "=== Running Integration Tests ==="
-        test -f bin/test_integration || { echo "ERROR: bin/test_integration not found"; exit 1; }
-        test -x bin/test_integration || chmod +x bin/test_integration
-        ./bin/test_integration || exit 1
+        echo "=== All tests passed ==="
 
     - name: Build all binaries
       run: |
@@ -115,11 +76,11 @@ jobs:
         echo "=== Testing CLI ==="
         echo "init" | timeout 5 ./bin/vhsm || true
 
-    - name: Upload test results
+    - name: Upload test results and logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results
+        name: test-results-and-logs
         path: |
           test_*.log
           build_*.log
