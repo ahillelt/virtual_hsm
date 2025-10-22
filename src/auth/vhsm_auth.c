@@ -1,4 +1,5 @@
 #include "vhsm.h"
+#include "../core/vhsm_internal.h"
 #include "../utils/secure_memory.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -31,30 +32,18 @@ typedef struct {
     uint32_t failed_attempts;
 } vhsm_user_t;
 
-/* Session structure */
-typedef struct {
-    uint64_t session_id;
-    char username[VHSM_MAX_USERNAME];
-    vhsm_role_t role;
-    time_t created;
-    time_t last_activity;
-    int active;
-    void* ctx;
-} vhsm_session_data_t;
-
-/* Auth context */
-typedef struct {
+/* Auth context structure - matches forward declaration in vhsm_internal.h */
+struct vhsm_auth_ctx_s {
     char storage_path[VHSM_MAX_PATH];
     vhsm_user_t users[MAX_USERS];
     int user_count;
     vhsm_session_data_t sessions[MAX_SESSIONS];
     pthread_mutex_t lock;
     uint64_t next_session_id;
-} vhsm_auth_ctx_t;
+};
 
 /* Helper functions */
 static int hash_password(const char* password, const uint8_t* salt, uint8_t* hash) {
-    unsigned int hash_len = HASH_SIZE;
     return PKCS5_PBKDF2_HMAC(password, strlen(password), salt, SALT_SIZE,
                              100000, EVP_sha512(), HASH_SIZE, hash) == 1;
 }

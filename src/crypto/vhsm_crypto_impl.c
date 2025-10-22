@@ -9,16 +9,6 @@
 
 #define MAX_KEY_DATA_SIZE 8192
 
-/* External storage context structure */
-typedef struct {
-    char storage_path[VHSM_MAX_PATH];
-    void* keys;  /* Array of key entries */
-    int key_count;
-    pthread_mutex_t lock;
-    uint64_t next_handle;
-    uint8_t* master_key;
-} vhsm_storage_ctx_t;
-
 /* Helper: Decrypt key data from storage */
 static vhsm_error_t decrypt_stored_key(vhsm_storage_ctx_t* storage,
                                         vhsm_key_handle_t handle,

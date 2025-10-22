@@ -1,4 +1,5 @@
 #include "vhsm.h"
+#include "vhsm_internal.h"
 #include "../utils/secure_memory.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -6,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
 /* Global library state */
 static struct {
@@ -16,17 +18,6 @@ static struct {
 } g_library_state = {
     .initialized = 0,
     .lock = PTHREAD_MUTEX_INITIALIZER
-};
-
-/* Internal context structure */
-struct vhsm_context {
-    char storage_path[VHSM_MAX_PATH];
-    uint8_t master_key[VHSM_AES_256_KEY_SIZE];
-    int master_key_set;
-    pthread_mutex_t lock;
-    void* auth_ctx;
-    void* storage_ctx;
-    void* audit_ctx;
 };
 
 /* Library initialization */

@@ -14,7 +14,7 @@ BIN_DIR = bin
 CORE_SRCS = $(SRC_DIR)/core/vhsm_core.c
 AUTH_SRCS = $(SRC_DIR)/auth/vhsm_auth.c
 STORAGE_SRCS = $(SRC_DIR)/storage/vhsm_storage.c $(SRC_DIR)/storage/vhsm_storage_ops.c $(SRC_DIR)/storage/vhsm_file_storage.c
-CRYPTO_SRCS = $(SRC_DIR)/crypto/vhsm_crypto.c $(SRC_DIR)/crypto/vhsm_crypto_impl.c $(SRC_DIR)/crypto/vhsm_homomorphic.c
+CRYPTO_SRCS = $(SRC_DIR)/crypto/vhsm_crypto_impl.c $(SRC_DIR)/crypto/vhsm_homomorphic.c
 AUDIT_SRCS = $(SRC_DIR)/audit/vhsm_audit.c
 UTILS_SRCS = $(SRC_DIR)/utils/secure_memory.c
 

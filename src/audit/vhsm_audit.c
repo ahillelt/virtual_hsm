@@ -1,4 +1,5 @@
 #include "vhsm.h"
+#include "../core/vhsm_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,13 +9,13 @@
 
 #define MAX_LOG_ENTRY 2048
 
-/* Audit context */
-typedef struct {
+/* Audit context - matches forward declaration in vhsm_internal.h */
+struct vhsm_audit_ctx_s {
     char log_path[VHSM_MAX_PATH];
     FILE* log_file;
     pthread_mutex_t lock;
     int enabled;
-} vhsm_audit_ctx_t;
+};
 
 /* Get event type string */
 static const char* event_type_str(vhsm_audit_event_t type) {

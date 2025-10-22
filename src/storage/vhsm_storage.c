@@ -1,4 +1,5 @@
 #include "vhsm.h"
+#include "../core/vhsm_internal.h"
 #include "../utils/secure_memory.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -15,7 +16,7 @@
 #define MAX_KEY_DATA_SIZE 8192
 
 /* Internal key structure */
-typedef struct {
+struct vhsm_key_entry_s {
     vhsm_key_handle_t handle;
     vhsm_key_metadata_t metadata;
     uint8_t* encrypted_data;
@@ -25,17 +26,17 @@ typedef struct {
     uint8_t* public_key_data;
     size_t public_key_len;
     int allocated;
-} vhsm_key_entry_t;
+};
 
-/* Storage context */
-typedef struct {
+/* Storage context - matches forward declaration in vhsm_internal.h */
+struct vhsm_storage_ctx_s {
     char storage_path[VHSM_MAX_PATH];
     vhsm_key_entry_t keys[VHSM_MAX_KEYS];
     int key_count;
     pthread_mutex_t lock;
     uint64_t next_handle;
     uint8_t* master_key;
-} vhsm_storage_ctx_t;
+};
 
 /* Helper: Encrypt key data */
 static vhsm_error_t encrypt_key_data(const uint8_t* master_key,

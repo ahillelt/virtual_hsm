@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+bin/
+lib/
+
+# Test artifacts
+test_*.log
+test_*_storage/
+*_storage/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates (generated)
+server.crt
+server.key
+*.pem
+*.crt
+*.key
+
+# Storage
+vhsm_storage/
+*.dat
