@@ -58,11 +58,39 @@ jobs:
 
     - name: Run crypto tests
       run: |
+        set -x
         echo "=== Running Crypto Tests ==="
+        pwd
+        echo "Current directory contents:"
+        ls -la
+
+        echo "bin directory contents:"
         ls -la bin/ || { echo "ERROR: bin directory not found"; exit 1; }
-        test -f bin/test_crypto || { echo "ERROR: bin/test_crypto not found"; ls -la bin/; exit 1; }
-        test -x bin/test_crypto || { echo "ERROR: bin/test_crypto not executable"; chmod +x bin/test_crypto; }
-        ./bin/test_crypto || exit 1
+
+        echo "Checking if bin/test_crypto exists..."
+        if [ ! -f bin/test_crypto ]; then
+          echo "ERROR: bin/test_crypto not found"
+          echo "Looking for test binaries:"
+          find . -name "test_*" -type f 2>/dev/null
+          exit 1
+        fi
+
+        echo "File info for bin/test_crypto:"
+        file bin/test_crypto
+        ls -l bin/test_crypto
+
+        echo "Checking if executable..."
+        if [ ! -x bin/test_crypto ]; then
+          echo "WARNING: bin/test_crypto not executable, fixing..."
+          chmod +x bin/test_crypto
+        fi
+
+        echo "Attempting to run bin/test_crypto..."
+        ./bin/test_crypto || {
+          echo "ERROR: Test execution failed with exit code: $?"
+          ldd bin/test_crypto || true
+          exit 1
+        }
 
     - name: Run homomorphic encryption tests
       run: |
