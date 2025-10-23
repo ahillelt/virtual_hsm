@@ -32,8 +32,10 @@ SERVER_TLS_BIN = $(BIN_DIR)/vhsm-server-tls
 TEST_CRYPTO_BIN = $(BIN_DIR)/test_crypto
 TEST_HE_BIN = $(BIN_DIR)/test_homomorphic
 TEST_INTEGRATION_BIN = $(BIN_DIR)/test_integration
+TEST_REST_BIN = $(BIN_DIR)/test_rest_api
+TEST_CLI_BIN = $(BIN_DIR)/test_cli
 
-.PHONY: all clean lib cli server server-tls examples install test test-crypto test-he test-integration
+.PHONY: all clean lib cli server server-tls examples install test test-crypto test-he test-integration test-rest test-cli test-all
 
 all: lib cli server server-tls
 
@@ -114,6 +116,17 @@ $(TEST_INTEGRATION_BIN): tests/test_integration.c $(STATIC_LIB)
 	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
 	@echo "Integration tests built: $@"
 
+$(TEST_REST_BIN): tests/test_rest_api.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
+	@echo "REST API tests built: $@"
+
+$(TEST_CLI_BIN): tests/test_cli.c $(STATIC_LIB)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) $< -o $@ $(STATIC_LIB) $(LDFLAGS)
+	@echo "CLI tests built: $@"
+
+# Test targets
 test-crypto: $(TEST_CRYPTO_BIN)
 	@echo "Running crypto tests..."
 	@./$(TEST_CRYPTO_BIN)
@@ -126,11 +139,30 @@ test-integration: $(TEST_INTEGRATION_BIN)
 	@echo "Running integration tests..."
 	@./$(TEST_INTEGRATION_BIN)
 
+test-rest: $(TEST_REST_BIN) $(SERVER_BIN)
+	@echo "Running REST API tests..."
+	@./$(TEST_REST_BIN)
+
+test-cli: $(TEST_CLI_BIN) $(CLI_BIN)
+	@echo "Running CLI tests..."
+	@./$(TEST_CLI_BIN)
+
+# Run library/unit tests only (for CI - faster)
 test: $(TEST_CRYPTO_BIN) $(TEST_HE_BIN) $(TEST_INTEGRATION_BIN)
-	@echo "Running all tests..."
+	@echo "Running unit tests..."
 	@./$(TEST_CRYPTO_BIN) && \
 	./$(TEST_HE_BIN) && \
 	./$(TEST_INTEGRATION_BIN) && \
+	echo "All unit tests passed!" || echo "Some tests failed!"
+
+# Run all tests including dynamic interface tests
+test-all: $(TEST_CRYPTO_BIN) $(TEST_HE_BIN) $(TEST_INTEGRATION_BIN) $(TEST_REST_BIN) $(TEST_CLI_BIN) $(SERVER_BIN) $(CLI_BIN)
+	@echo "Running all tests (unit + dynamic)..."
+	@./$(TEST_CRYPTO_BIN) && \
+	./$(TEST_HE_BIN) && \
+	./$(TEST_INTEGRATION_BIN) && \
+	./$(TEST_CLI_BIN) && \
+	./$(TEST_REST_BIN) && \
 	echo "All tests passed!" || echo "Some tests failed!"
 
 # Install
