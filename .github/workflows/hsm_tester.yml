@@ -67,14 +67,14 @@ jobs:
     - name: Test 4 - Sign and verify data
       run: |
         echo "Test data for signing" > test_output/test_data.txt
-        ./virtual_hsm -sign test_key -input_file test_output/test_data.txt -output_file test_output/signature.bin
+        ./virtual_hsm -sign test_key -i test_output/test_data.txt -o test_output/signature.bin
         if [ ! -f test_output/signature.bin ]; then
           echo "Error: signature.bin not created"
           exit 1
         fi
         echo "✓ Signing successful"
 
-        ./virtual_hsm -verify test_key -input_file test_output/test_data.txt -signature_file test_output/signature.bin
+        ./virtual_hsm -verify test_key -i test_output/test_data.txt -s test_output/signature.bin
         echo "✓ Verification successful"
 
     - name: Test 5 - Export and import public key
@@ -86,7 +86,7 @@ jobs:
         fi
         echo "✓ Export public key successful"
 
-        ./virtual_hsm -import_public_key imported_key -input_file test_output/public_key.pem
+        ./virtual_hsm -import_public_key imported_key -i test_output/public_key.pem
         echo "✓ Import public key successful"
 
     - name: Test 6 - Store and retrieve symmetric key
