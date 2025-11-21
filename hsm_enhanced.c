@@ -134,7 +134,7 @@ int handle_rotate_key_command(const char* key_name) {
     unsigned char tag[TAG_SIZE];
     int encrypted_len;
 
-    if (encrypt_key(new_key, keystore[key_index].key_data, &encrypted_len, iv, tag) != KEY_SIZE) {
+    if (encrypt_key(new_key, keystore[key_index].key_data, &encrypted_len, iv, tag) != 1) {
         fprintf(stderr, "Error: Encryption failed during rotation\n");
         return 0;
     }
