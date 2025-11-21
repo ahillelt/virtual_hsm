@@ -335,22 +335,62 @@ int main(int argc, char *argv[]) {
         return handle_scan_hardware_command() ? 0 : 1;
     }
 
-    // Parse arguments
+    // Check for user ID setting (no key needed)
+    if (argc >= 3 && strcmp(argv[1], "-set_user") == 0) {
+        strncpy(current_user_id, argv[2], sizeof(current_user_id) - 1);
+        current_user_id[sizeof(current_user_id) - 1] = '\0';
+        printf("User ID set to: %s\n", current_user_id);
+        init_audit_log();  // Make sure audit log is initialized
+        write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id, "User ID changed", 1);
+        return 0;
+    }
+
+    // Check for enhanced commands BEFORE standard argument parsing
+    // These commands need special handling since the original parser doesn't recognize them
+    if (argc >= 2) {
+        const char* cmd = argv[1];
+
+        // Handle -rotate_key
+        if (strcmp(cmd, "-rotate_key") == 0) {
+            if (argc < 3) {
+                fprintf(stderr, "Error: -rotate_key requires a key name\n");
+                return 1;
+            }
+            load_master_key(NULL);
+            load_keystore();
+            return handle_rotate_key_command(argv[2]) ? 0 : 1;
+        }
+
+        // Handle -key_info
+        if (strcmp(cmd, "-key_info") == 0) {
+            if (argc < 3) {
+                fprintf(stderr, "Error: -key_info requires a key name\n");
+                return 1;
+            }
+            load_master_key(NULL);
+            load_keystore();
+            return handle_key_info_command(argv[2]) ? 0 : 1;
+        }
+
+        // Handle -audit_logs
+        if (strcmp(cmd, "-audit_logs") == 0) {
+            int days = 7;  // default
+            if (argc >= 3) {
+                sscanf(argv[2], "%d", &days);
+            }
+            time_t now = time(NULL);
+            time_t start = now - (days * 24 * 60 * 60);
+            return handle_list_audit_logs_command(start, now) ? 0 : 1;
+        }
+    }
+
+    // Parse arguments using standard parser (for original commands)
     CommandLineArgs args;
     if (!handle_arguments(argc, argv, &args)) {
         return 1;
     }
 
     update_global_paths(&args);
-
-    // Check for user ID setting
-    if (argc >= 3 && strcmp(argv[1], "-set_user") == 0) {
-        strncpy(current_user_id, argv[2], sizeof(current_user_id) - 1);
-        current_user_id[sizeof(current_user_id) - 1] = '\0';
-        printf("User ID set to: %s\n", current_user_id);
-        write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id, "User ID changed", 1);
-        return 0;
-    }
 
     // Handle generate_master_key before loading
     if (strcmp(args.command, "-generate_master_key") == 0) {
@@ -385,22 +425,7 @@ int main(int argc, char *argv[]) {
     load_master_key(args.provided_master_key);
     load_keystore();
 
-    // Enhanced commands
-    if (strcmp(args.command, "-rotate_key") == 0) {
-        return handle_rotate_key_command(args.key_name) ? 0 : 1;
-    } else if (strcmp(args.command, "-key_info") == 0) {
-        return handle_key_info_command(args.key_name) ? 0 : 1;
-    } else if (strcmp(args.command, "-audit_logs") == 0) {
-        int days = 7;  // default
-        if (args.key_name && sscanf(args.key_name, "%d", &days) == 1) {
-            // key_name used as days parameter
-        }
-        time_t now = time(NULL);
-        time_t start = now - (days * 24 * 60 * 60);
-        return handle_list_audit_logs_command(start, now) ? 0 : 1;
-    }
-
-    // Standard commands with audit logging
+    // Standard commands with audit logging (enhanced commands already handled above)
     if (strcmp(args.command, "-store") == 0) {
         char hex_key[KEY_SIZE * 2 + 1];
         if (fread(hex_key, 1, KEY_SIZE * 2, stdin) != KEY_SIZE * 2) {
