@@ -115,7 +115,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libssl-dev
+        sudo apt-get install -y build-essential libssl-dev libfido2-dev libjson-c-dev
 
     - name: Build enhanced HSM
       run: |
@@ -124,6 +124,15 @@ jobs:
           exit 1
         }
         chmod +x hsm_enhanced
+
+    - name: Build passkey tool
+      run: |
+        gcc -o passkey_tool passkey.c -lfido2 -ljson-c -lcrypto -g -Wall -Wextra || {
+          echo "Passkey tool build failed!"
+          exit 1
+        }
+        chmod +x passkey_tool
+        echo "✓ Passkey tool built successfully"
 
     - name: Test hardware scan
       run: |
@@ -159,6 +168,26 @@ jobs:
         grep "SIGN_OPERATION" hsm_audit.log || exit 1
         echo "✓ Audit log contains expected entries"
 
+    - name: Test enhanced commands
+      run: |
+        # Test set_user command
+        ./hsm_enhanced -set_user "test_user@example.com" | grep "User ID set"
+        echo "✓ Set user command works"
+
+        # Test key_info command
+        ./hsm_enhanced -key_info test_key1 | grep "Key Information"
+        echo "✓ Key info command works"
+
+        # Test audit_logs command
+        ./hsm_enhanced -audit_logs 1 | grep "Audit Log"
+        echo "✓ Audit logs command works"
+
+        # Test rotate_key command
+        echo -n "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" | ./hsm_enhanced -store rotate_test_key
+        ./hsm_enhanced -rotate_key rotate_test_key
+        ./hsm_enhanced -key_info rotate_test_key | grep "Rotation Version: 2"
+        echo "✓ Key rotation command works"
+
     - name: Test token file storage
       run: |
         chmod +x token/token
@@ -180,7 +209,9 @@ jobs:
         echo "✓ Audit logging"
         echo "✓ Key lifecycle metadata"
         echo "✓ Enhanced signing/verification"
+        echo "✓ Enhanced commands (set_user, key_info, audit_logs, rotate_key)"
         echo "✓ Token file storage"
+        echo "✓ Passkey tool compilation"
 
   cross-compile:
     needs: build-and-test
