@@ -1,0 +1,221 @@
+name: Virtual HSM - Test and Build
+
+on:
+  push:
+    branches: [ main, claude/refactor-virtual-hsm-* ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libssl-dev \
+          zlib1g-dev \
+          uuid-dev \
+          libsodium-dev
+
+    - name: Build library and tests
+      run: |
+        set -x
+        echo "=== Starting build process ==="
+        pwd
+        ls -la
+
+        echo "=== Step 1: make clean ==="
+        make clean || { echo "ERROR: make clean failed"; exit 1; }
+
+        echo "=== Step 2: make lib ==="
+        make lib 2>&1 | tee build_lib.log || { echo "ERROR: make lib failed"; cat build_lib.log; exit 1; }
+        ls -la lib/ || echo "lib directory missing!"
+
+        echo "=== Step 3: Build and run test suites ==="
+        # Use test targets which build and run tests
+        echo "Running crypto tests..."
+        make test-crypto 2>&1 | tee test_crypto.log || {
+          echo "ERROR: Crypto tests failed"
+          cat test_crypto.log
+          exit 1
+        }
+
+        echo "Running homomorphic encryption tests..."
+        make test-he 2>&1 | tee test_he.log || {
+          echo "ERROR: Homomorphic encryption tests failed"
+          cat test_he.log
+          exit 1
+        }
+
+        echo "Running integration tests..."
+        make test-integration 2>&1 | tee test_integration.log || {
+          echo "ERROR: Integration tests failed"
+          cat test_integration.log
+          exit 1
+        }
+
+        echo "=== All unit tests passed ==="
+
+    - name: Run CLI interface tests
+      run: |
+        echo "=== Testing CLI Interface ==="
+        make test-cli 2>&1 | tee test_cli.log || {
+          echo "ERROR: CLI tests failed"
+          cat test_cli.log
+          exit 1
+        }
+
+    - name: Run REST API interface tests
+      run: |
+        echo "=== Testing REST API Interface ==="
+        make test-rest 2>&1 | tee test_rest.log || {
+          echo "ERROR: REST API tests failed"
+          cat test_rest.log
+          exit 1
+        }
+
+    - name: Build all binaries
+      run: |
+        make all
+
+    - name: Upload test results and logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-and-logs
+        path: |
+          test_*.log
+          build_*.log
+          test_*_storage/
+          bin/test_*
+        if-no-files-found: warn
+
+  build:
+    name: Build All Components
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libssl-dev \
+          zlib1g-dev \
+          uuid-dev \
+          libsodium-dev
+
+    - name: Build everything
+      run: |
+        make clean
+        make all
+        make examples
+
+    - name: Verify build outputs
+      run: |
+        test -f lib/libvhsm.a || { echo "Static library missing"; exit 1; }
+        test -f lib/libvhsm.so || { echo "Shared library missing"; exit 1; }
+        test -f bin/vhsm || { echo "CLI missing"; exit 1; }
+        test -f bin/vhsm-server || { echo "Server missing"; exit 1; }
+        test -f bin/vhsm-server-tls || { echo "TLS server missing"; exit 1; }
+        test -f bin/example_basic || { echo "Example missing"; exit 1; }
+        echo "All binaries built successfully"
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: vhsm-linux-build
+        path: |
+          lib/
+          bin/
+          include/
+        if-no-files-found: error
+
+  security-scan:
+    name: Security Scanning
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run code security scan
+      run: |
+        # Simple security checks
+        echo "=== Checking for common security issues ==="
+
+        # Check for strcpy, sprintf, gets
+        if grep -r "strcpy\|sprintf\|gets" src/ include/ --exclude-dir=build; then
+          echo "WARNING: Found potentially unsafe functions"
+        fi
+
+        # Check for hardcoded secrets (basic check)
+        if grep -ri "password.*=.*[\"\']" src/ --exclude="*.md"; then
+          echo "WARNING: Possible hardcoded passwords found"
+        fi
+
+        echo "Basic security scan complete"
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check documentation
+      run: |
+        test -f README_V2.md || { echo "README_V2.md missing"; exit 1; }
+        test -f include/vhsm.h || { echo "API header missing"; exit 1; }
+        echo "Documentation files present"
+
+    - name: Validate API completeness
+      run: |
+        # Check that key API functions are declared
+        grep -q "vhsm_init" include/vhsm.h || { echo "Missing vhsm_init"; exit 1; }
+        grep -q "vhsm_ctx_create" include/vhsm.h || { echo "Missing vhsm_ctx_create"; exit 1; }
+        grep -q "vhsm_user_create" include/vhsm.h || { echo "Missing vhsm_user_create"; exit 1; }
+        grep -q "vhsm_key_generate" include/vhsm.h || { echo "Missing vhsm_key_generate"; exit 1; }
+        grep -q "vhsm_encrypt" include/vhsm.h || { echo "Missing vhsm_encrypt"; exit 1; }
+        echo "API declarations complete"
+
+  summary:
+    name: Test Summary
+    needs: [test, build, security-scan, documentation]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+    - name: Check job status
+      run: |
+        echo "=== Test Suite Summary ==="
+        echo "Tests: ${{ needs.test.result }}"
+        echo "Build: ${{ needs.build.result }}"
+        echo "Security: ${{ needs.security-scan.result }}"
+        echo "Documentation: ${{ needs.documentation.result }}"
+
+        if [ "${{ needs.test.result }}" != "success" ]; then
+          echo "❌ Tests failed"
+          exit 1
+        fi
+
+        if [ "${{ needs.build.result }}" != "success" ]; then
+          echo "❌ Build failed"
+          exit 1
+        fi
+
+        echo "✅ All checks passed"
