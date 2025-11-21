@@ -54,6 +54,9 @@ int test_authentication() {
 
     /* Create user */
     err = vhsm_user_create(ctx, "testuser", "testpass", NULL, VHSM_ROLE_USER);
+    if (err != VHSM_SUCCESS && err != VHSM_ERROR_KEY_EXISTS) {
+        printf("  vhsm_user_create returned error code: %d\n", err);
+    }
     assert(err == VHSM_SUCCESS || err == VHSM_ERROR_KEY_EXISTS);
 
     /* Login */

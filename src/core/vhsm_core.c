@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 
 /* Global library state */
 static struct {
@@ -125,6 +128,14 @@ vhsm_error_t vhsm_ctx_create(vhsm_ctx_t* ctx, const char* storage_path) {
 
     if (!g_library_state.initialized) {
         return VHSM_ERROR_NOT_INITIALIZED;
+    }
+
+    /* Create storage directory if it doesn't exist */
+    struct stat st = {0};
+    if (stat(storage_path, &st) == -1) {
+        if (mkdir(storage_path, 0700) != 0 && errno != EEXIST) {
+            return VHSM_ERROR_IO_FAILED;
+        }
     }
 
     struct vhsm_context* context = calloc(1, sizeof(struct vhsm_context));
