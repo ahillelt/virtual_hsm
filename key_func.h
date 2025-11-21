@@ -77,7 +77,7 @@ void load_master_key(const char *provided_key) {
             exit(1);
         }
         fclose(file);
-        printf("WARNING: Master key loaded from file. This is insecure and should only be used for educational purposes.\n");
+        fprintf(stderr, "WARNING: Master key loaded from file. This is insecure and should only be used for educational purposes.\n");
     }
 }
 

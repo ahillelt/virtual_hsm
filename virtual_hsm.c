@@ -60,8 +60,16 @@ int main(int argc, char *argv[]) {
     if (strcmp(args.command, "-generate_master_key") == 0) {
         generate_master_key();
 
-        // Check for the "store_key" argument
-        if (argc > 2 && strcmp(argv[2], "store_key") == 0) {
+        // Check for the "store_key" argument anywhere in the command line
+        int store_key_found = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "store_key") == 0) {
+                store_key_found = 1;
+                break;
+            }
+        }
+
+        if (store_key_found) {
             // Store the generated master key in master_key_file
             FILE *file = fopen(master_key_file, "wb");
             if (file == NULL) {

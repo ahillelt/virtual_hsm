@@ -2,7 +2,9 @@ name: Virtual HSM Test and Cross-Compilation
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - 'claude/**'
   pull_request:
     branches: [ main ]
     
@@ -20,7 +22,90 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    # ... rest of the build-and-test job remains the same ...
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libssl-dev
+
+    - name: Build virtual_hsm
+      run: |
+        gcc -o virtual_hsm virtual_hsm.c -lcrypto -lssl -g -Wall -Wextra || {
+          echo "Build failed!"
+          exit 1
+        }
+
+    - name: Verify binary exists
+      run: |
+        if [ ! -f virtual_hsm ]; then
+          echo "Error: virtual_hsm binary not found"
+          exit 1
+        fi
+        chmod +x virtual_hsm
+
+    - name: Create test directories
+      run: |
+        mkdir -p test_output
+
+    - name: Test 1 - Generate master key
+      run: |
+        ./virtual_hsm -generate_master_key store_key
+        if [ ! -f master.key ]; then
+          echo "Error: master.key not generated"
+          exit 1
+        fi
+        echo "✓ Master key generation successful"
+
+    - name: Test 2 - Generate key pair
+      run: |
+        ./virtual_hsm -generate_key_pair test_key
+        echo "✓ Key pair generation successful"
+
+    - name: Test 3 - List keys
+      run: |
+        ./virtual_hsm -list
+        echo "✓ List keys successful"
+
+    - name: Test 4 - Sign and verify data
+      run: |
+        echo "Test data for signing" > test_output/test_data.txt
+        ./virtual_hsm -sign test_key -i test_output/test_data.txt -o test_output/signature.bin
+        if [ ! -f test_output/signature.bin ]; then
+          echo "Error: signature.bin not created"
+          exit 1
+        fi
+        echo "✓ Signing successful"
+
+        ./virtual_hsm -verify test_key -i test_output/test_data.txt -s test_output/signature.bin
+        echo "✓ Verification successful"
+
+    - name: Test 5 - Export and import public key
+      run: |
+        ./virtual_hsm -export_public_key test_key > test_output/public_key.pem
+        if [ ! -f test_output/public_key.pem ]; then
+          echo "Error: public_key.pem not created"
+          exit 1
+        fi
+        echo "✓ Export public key successful"
+
+        ./virtual_hsm -import_public_key imported_key -i test_output/public_key.pem
+        echo "✓ Import public key successful"
+
+    - name: Test 6 - Store and retrieve symmetric key
+      run: |
+        echo -n "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" | ./virtual_hsm -store sym_key
+        ./virtual_hsm -retrieve sym_key > test_output/retrieved_key.txt
+        if [ ! -f test_output/retrieved_key.txt ]; then
+          echo "Error: retrieved_key.txt not created"
+          exit 1
+        fi
+        echo "✓ Store and retrieve symmetric key successful"
+
+    - name: All tests passed
+      run: |
+        echo "========================================="
+        echo "All virtual_hsm tests passed successfully!"
+        echo "========================================="
 
   cross-compile:
     needs: build-and-test
@@ -44,10 +129,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies 
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential mingw-w64 libssl-dev
+          sudo apt-get install -y build-essential mingw-w64 libssl-dev zip
 
       - name: Build static OpenSSL for Windows
         if: contains(matrix.target, 'windows')
@@ -80,8 +165,9 @@ jobs:
               exit 1
           }
       
-          make -j$(nproc) build_sw || {
+          make -j$(nproc) build_sw 2>&1 | tee make.log || {
             echo "Make failed!"
+            echo "Last 50 lines of build output:"
             tail -n 50 make.log
             exit 1
           }
