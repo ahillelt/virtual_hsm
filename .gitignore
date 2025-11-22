@@ -3,6 +3,11 @@ build/
 bin/
 lib/
 
+# Test binaries (built locally)
+virtual_hsm
+hsm_enhanced_test
+passkey_tool
+
 # Test artifacts
 test_*.log
 test_*_storage/
