@@ -627,24 +627,71 @@ Add this value to your repository secrets as `MASTER_KEY`.
 
 ## Building from Source
 
+### Quick Build (All Platforms)
+
+**Linux/macOS:**
+```bash
+# Automated build script (recommended)
+./build.sh
+
+# Or build specific components
+./build.sh library    # Library only
+./build.sh cli        # CLI only
+./build.sh standalone # Standalone tools only
+./build.sh test       # Build and run tests
+./build.sh package    # Create distribution package
+./build.sh clean      # Clean build artifacts
+```
+
+**macOS (with Homebrew):**
+```bash
+# macOS-specific build (handles Homebrew dependencies)
+./build-macos.sh
+
+# Or install dependencies and build
+./build-macos.sh deps     # Install dependencies
+./build-macos.sh all      # Build everything
+./build-macos.sh bundle   # Create .app bundle
+```
+
+**Windows:**
+```batch
+REM Using MinGW or Visual Studio
+build.bat
+
+REM Or specific targets
+build.bat standalone  # Build standalone tools
+build.bat clean       # Clean build artifacts
+```
+
 ### Prerequisites
 
-**Ubuntu/Debian:**
+**Linux (Ubuntu/Debian):**
 ```bash
 sudo apt-get install build-essential libssl-dev zlib1g-dev uuid-dev libsodium-dev
 ```
 
-**Fedora/RHEL:**
+**Linux (Fedora/RHEL):**
 ```bash
-sudo dnf install gcc openssl-devel zlib-devel libuuid-devel libsodium-devel
+sudo dnf install gcc make openssl-devel zlib-devel libuuid-devel libsodium-devel
 ```
+
+**macOS:**
+```bash
+brew install openssl zlib ossp-uuid libsodium
+```
+
+**Windows:**
+- Install [MinGW-w64](https://www.mingw-w64.org/) or [Visual Studio](https://visualstudio.microsoft.com/)
+- Install [OpenSSL for Windows](https://slproweb.com/products/Win32OpenSSL.html)
 
 **Optional (for FIDO2/YubiKey support):**
 ```bash
-sudo apt-get install libfido2-dev libjson-c-dev
+sudo apt-get install libfido2-dev libjson-c-dev  # Linux
+brew install libfido2 json-c                      # macOS
 ```
 
-### Build Commands
+### Manual Build Commands
 
 ```bash
 # Build everything
@@ -668,11 +715,96 @@ make clean
 
 ```
 lib/libvhsm.a       # Static library
-lib/libvhsm.so      # Shared library
+lib/libvhsm.so      # Shared library (Linux)
+lib/libvhsm.dylib   # Shared library (macOS)
 bin/vhsm            # CLI application
 bin/vhsm-server     # REST API server
 bin/vhsm-server-tls # TLS REST server
 bin/example_basic   # Example program
+virtual_hsm         # Standalone CLI tool
+hsm_enhanced        # Enhanced HSM tool
+```
+
+### Environment Variables
+
+Build scripts support these environment variables:
+
+```bash
+BUILD_TYPE=Debug ./build.sh      # Debug build
+ENABLE_TESTS=0 ./build.sh        # Skip tests
+ENABLE_PYTHON=0 ./build.sh       # Skip Python library
+JOBS=8 ./build.sh                # Parallel jobs
+```
+
+### Cross-Platform Notes
+
+**Linux:** Full support for all features
+**macOS:** Full support, uses Homebrew for dependencies
+**Windows:** Standalone tools supported, library API requires MinGW or MSVC
+
+### Configuration
+
+The HSM can be configured via configuration file `hsm_config.conf`:
+
+```bash
+# Create default configuration
+./hsm_enhanced -create_config hsm_config.conf
+
+# View current configuration
+./hsm_enhanced -show_config
+```
+
+**Key Configuration Options:**
+
+```ini
+# Key Rotation
+key_rotation_days=90          # Days before automatic rotation
+max_key_age_days=365          # Maximum key age
+rotation_enabled=1            # Enable auto-rotation
+
+# Session Management
+session_timeout_seconds=3600  # 1 hour timeout
+max_concurrent_sessions=0     # Unlimited
+
+# Security
+max_failed_auth_attempts=3    # Lockout after 3 failures
+password_min_length=8         # Minimum password length
+
+# Audit
+audit_enabled=1               # Enable audit logging
+audit_log_file=hsm_audit.log  # Log file path
+
+# Advanced
+fips_mode=0                   # FIPS 140-2 mode
+secure_memory=1               # Lock keys in memory
+```
+
+**Change Rotation Frequency:**
+
+```bash
+# Set rotation period to 30 days
+./hsm_enhanced -set_rotation_period 30
+
+# Set rotation period to 180 days
+./hsm_enhanced -set_rotation_period 180
+
+# Disable automatic rotation
+./hsm_enhanced -set_rotation_enabled 0
+
+# Enable automatic rotation
+./hsm_enhanced -set_rotation_enabled 1
+```
+
+**Programmatic Configuration (Python):**
+
+```python
+import vhsm
+
+# Load and modify configuration
+hsm = vhsm.HSM('/tmp/hsm_storage')
+
+# Set rotation period (requires enhanced HSM)
+# Configuration is managed through hsm_config.conf file
 ```
 
 ## Testing
