@@ -1,8 +1,0 @@
-# Virtual HSM Audit Log
-# Format: timestamp|event_type|key_name|user_id|details|success
-2025-11-21 19:48:50|KEY_CREATED|master_key|default_user|Master key generated|SUCCESS
-2025-11-21 19:48:50|KEY_CREATED|test_key1|default_user|Symmetric key stored|SUCCESS
-2025-11-21 19:48:50|KEY_CREATED|signing_key|default_user|Key pair generated|SUCCESS
-2025-11-21 19:48:50|SIGN_OPERATION|signing_key|default_user|Data signed|SUCCESS
-2025-11-21 19:48:50|VERIFY_OPERATION|signing_key|default_user|Signature verified|SUCCESS
-2025-11-21 19:48:50|KEY_ACCESSED|N/A|default_user|Listed all keys|SUCCESS

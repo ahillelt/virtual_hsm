@@ -19,6 +19,7 @@
 #include "utils.h"
 #include "key_func.h"
 #include "hsm_security.h"
+#include "hsm_config.h"
 
 // Global variables
 KeyEntry keystore[MAX_KEYS];
@@ -76,6 +77,14 @@ void print_enhanced_usage(void) {
     printf("  -encrypt_file <file> <token>       Encrypt file (chunked)\n");
     printf("  -decrypt_file <token> <output>     Decrypt file\n");
     printf("  -set_user <user_id>                Set current user for access control\n\n");
+
+    printf("Configuration Commands:\n");
+    printf("  -set_rotation_period <days>        Set key rotation period (1-3650 days)\n");
+    printf("  -set_rotation_enabled <0|1>        Enable/disable automatic rotation\n");
+    printf("  -set_session_timeout <seconds>     Set session timeout\n");
+    printf("  -show_config                       Display current configuration\n");
+    printf("  -load_config <file>                Load configuration from file\n");
+    printf("  -save_config <file>                Save configuration to file\n\n");
 
     printf("Options:\n");
     printf("  -keystore <file>                   Custom keystore file\n");
@@ -322,6 +331,9 @@ int main(int argc, char *argv[]) {
     // Initialize security
     init_audit_log();
 
+    // Initialize configuration with defaults
+    hsm_config_init_defaults(&g_hsm_config);
+
     fprintf(stderr, "Debug: Enhanced Virtual HSM starting\n");
 
     // Check for help
@@ -343,6 +355,67 @@ int main(int argc, char *argv[]) {
         init_audit_log();  // Make sure audit log is initialized
         write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id, "User ID changed", 1);
         return 0;
+    }
+
+    // Configuration commands
+    if (argc >= 2 && strcmp(argv[1], "-show_config") == 0) {
+        hsm_config_print(&g_hsm_config, stdout);
+        return 0;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "-set_rotation_period") == 0) {
+        int days = atoi(argv[2]);
+        if (hsm_config_set_rotation_period(days) == 0) {
+            printf("Key rotation period set to %d days\n", days);
+            write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id,
+                           "Rotation period changed", 1);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "-set_rotation_enabled") == 0) {
+        int enabled = atoi(argv[2]);
+        if (hsm_config_set_rotation_enabled(enabled) == 0) {
+            printf("Automatic key rotation %s\n", enabled ? "enabled" : "disabled");
+            write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id,
+                           "Rotation setting changed", 1);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "-set_session_timeout") == 0) {
+        int seconds = atoi(argv[2]);
+        if (hsm_config_set_session_timeout(seconds) == 0) {
+            printf("Session timeout set to %d seconds\n", seconds);
+            write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id,
+                           "Session timeout changed", 1);
+            return 0;
+        }
+        return 1;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "-load_config") == 0) {
+        if (hsm_config_load(&g_hsm_config, argv[2]) == 0) {
+            printf("Configuration loaded from %s\n", argv[2]);
+            write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id,
+                           "Configuration loaded", 1);
+            return 0;
+        }
+        fprintf(stderr, "Error: Failed to load configuration from %s\n", argv[2]);
+        return 1;
+    }
+
+    if (argc >= 3 && strcmp(argv[1], "-save_config") == 0) {
+        if (hsm_config_save(&g_hsm_config, argv[2]) == 0) {
+            printf("Configuration saved to %s\n", argv[2]);
+            write_audit_log(AUDIT_CONFIG_CHANGE, NULL, current_user_id,
+                           "Configuration saved", 1);
+            return 0;
+        }
+        fprintf(stderr, "Error: Failed to save configuration to %s\n", argv[2]);
+        return 1;
     }
 
     // Check for enhanced commands BEFORE standard argument parsing
