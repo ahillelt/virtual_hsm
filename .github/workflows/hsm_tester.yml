@@ -188,11 +188,44 @@ jobs:
         ./hsm_enhanced -key_info rotate_test_key | grep "Rotation Version: 2"
         echo "✓ Key rotation command works"
 
-    - name: Test token file storage
+    - name: Test file signing and verification
       run: |
-        echo "⚠ Token file storage test skipped (requires specific setup)"
-        echo "Token system requires secure_storage/ directory and proper permissions"
-        echo "This is tested separately in integration tests"
+        # Create a test file with random content
+        dd if=/dev/urandom of=test_document.bin bs=1024 count=10 2>/dev/null
+        echo "Created random test file (10KB)"
+
+        # Calculate and display file hash for verification
+        sha256sum test_document.bin
+
+        # Generate signing key pair
+        ./hsm_enhanced -generate_key_pair file_signer
+        test -f keystore.dat || exit 1
+        echo "✓ Signing key pair generated"
+
+        # Sign the file
+        ./hsm_enhanced -sign file_signer -i test_document.bin -o test_document.sig
+        test -f test_document.sig || exit 1
+        test $(wc -c < test_document.sig) -eq 64 || exit 1
+        echo "✓ File signed successfully (64-byte ED25519 signature)"
+
+        # Verify the signature
+        ./hsm_enhanced -verify file_signer -i test_document.bin -s test_document.sig
+        echo "✓ File signature verified successfully"
+
+        # Create a second test file to ensure signing produces different signatures
+        dd if=/dev/urandom of=test_document2.bin bs=1024 count=10 2>/dev/null
+        ./hsm_enhanced -sign file_signer -i test_document2.bin -o test_document2.sig
+
+        # Verify signatures are different for different files
+        if ! cmp -s test_document.sig test_document2.sig; then
+          echo "✓ Different files produce different signatures"
+        else
+          echo "✗ Warning: Identical signatures for different files!"
+        fi
+
+        # Clean up test files
+        rm -f test_document.bin test_document.sig test_document2.bin test_document2.sig
+        echo "✓ File signing and verification test completed"
 
     - name: Enhanced features test summary
       run: |
@@ -204,7 +237,7 @@ jobs:
         echo "✓ Key lifecycle metadata"
         echo "✓ Enhanced signing/verification"
         echo "✓ Enhanced commands (set_user, key_info, audit_logs, rotate_key)"
-        echo "⚠ Token file storage (skipped - requires specific setup)"
+        echo "✓ File signing and verification (10KB random file)"
         echo "✓ Passkey tool compilation"
 
   cross-compile:
