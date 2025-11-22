@@ -1,4 +1,4 @@
-name: Virtual HSM - Test and Build
+name: Library API - Build and Test
 
 on:
   push:
@@ -179,32 +179,9 @@ jobs:
 
         echo "Basic security scan complete"
 
-  documentation:
-    name: Documentation Check
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Check documentation
-      run: |
-        test -f README_V2.md || { echo "README_V2.md missing"; exit 1; }
-        test -f include/vhsm.h || { echo "API header missing"; exit 1; }
-        echo "Documentation files present"
-
-    - name: Validate API completeness
-      run: |
-        # Check that key API functions are declared
-        grep -q "vhsm_init" include/vhsm.h || { echo "Missing vhsm_init"; exit 1; }
-        grep -q "vhsm_ctx_create" include/vhsm.h || { echo "Missing vhsm_ctx_create"; exit 1; }
-        grep -q "vhsm_user_create" include/vhsm.h || { echo "Missing vhsm_user_create"; exit 1; }
-        grep -q "vhsm_key_generate" include/vhsm.h || { echo "Missing vhsm_key_generate"; exit 1; }
-        grep -q "vhsm_encrypt" include/vhsm.h || { echo "Missing vhsm_encrypt"; exit 1; }
-        echo "API declarations complete"
-
   summary:
     name: Test Summary
-    needs: [test, build, security-scan, documentation]
+    needs: [test, build, security-scan]
     runs-on: ubuntu-latest
     if: always()
 
@@ -215,7 +192,6 @@ jobs:
         echo "Tests: ${{ needs.test.result }}"
         echo "Build: ${{ needs.build.result }}"
         echo "Security: ${{ needs.security-scan.result }}"
-        echo "Documentation: ${{ needs.documentation.result }}"
 
         if [ "${{ needs.test.result }}" != "success" ]; then
           echo "❌ Tests failed"

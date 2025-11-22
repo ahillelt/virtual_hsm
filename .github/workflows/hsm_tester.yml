@@ -1,4 +1,4 @@
-name: Virtual HSM Test and Cross-Compilation
+name: Standalone Tools - Test and Cross-Compile
 
 on:
   push:
