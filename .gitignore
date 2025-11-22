@@ -36,6 +36,7 @@ server.key
 # Storage
 vhsm_storage/
 *.dat
+.*.metadata
 
 # Python
 __pycache__/
