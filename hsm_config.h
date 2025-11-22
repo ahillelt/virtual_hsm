@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 
 // Default configuration values
 #define DEFAULT_CONFIG_FILE "hsm_config.conf"
@@ -14,6 +18,12 @@
 #define DEFAULT_MAX_FAILED_AUTH_ATTEMPTS 3
 #define DEFAULT_AUDIT_LOG_FILE "hsm_audit.log"
 #define DEFAULT_STORAGE_PATH "."
+
+// Encryption constants for config file
+#define CONFIG_IV_SIZE 12
+#define CONFIG_TAG_SIZE 16
+#define CONFIG_MAGIC "VHSMCFG1"  // Magic number for encrypted config files
+#define CONFIG_MAGIC_SIZE 8
 
 // HSM Configuration Structure
 typedef struct {
@@ -164,6 +174,133 @@ int hsm_config_create_default(const char *filename);
 // Global configuration instance
 HSMConfig g_hsm_config;
 
+// Static configuration encryption key (derived from system properties)
+static unsigned char config_enc_key[32] = {0};
+static int config_enc_key_initialized = 0;
+
+/**
+ * Initialize configuration encryption key
+ * Derives a key from system properties for config encryption
+ */
+static void init_config_encryption_key(void) {
+    if (config_enc_key_initialized) {
+        return;
+    }
+
+    // In production, this should derive from:
+    // 1. Hardware identifier (CPU ID, MAC address)
+    // 2. Installation-specific salt
+    // 3. User-provided passphrase
+    // For now, use a deterministic key derived from known values
+    const char *salt = "VHSM_CONFIG_SALT_V1";
+    unsigned char temp[SHA256_DIGEST_LENGTH];
+    SHA256((const unsigned char*)salt, strlen(salt), temp);
+    memcpy(config_enc_key, temp, 32);
+
+    config_enc_key_initialized = 1;
+}
+
+/**
+ * Encrypt configuration data
+ */
+static int encrypt_config_data(const unsigned char *plaintext, size_t plaintext_len,
+                               unsigned char *ciphertext, size_t *ciphertext_len,
+                               unsigned char *iv, unsigned char *tag) {
+    init_config_encryption_key();
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return -1;
+    }
+
+    // Generate random IV
+    if (RAND_bytes(iv, CONFIG_IV_SIZE) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    // Initialize encryption
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, config_enc_key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    int len;
+    size_t total_len = 0;
+
+    // Encrypt data
+    if (EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    total_len += len;
+
+    // Finalize encryption
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + total_len, &len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    total_len += len;
+
+    // Get authentication tag
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, CONFIG_TAG_SIZE, tag) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    *ciphertext_len = total_len;
+    EVP_CIPHER_CTX_free(ctx);
+    return 0;
+}
+
+/**
+ * Decrypt configuration data
+ */
+static int decrypt_config_data(const unsigned char *ciphertext, size_t ciphertext_len,
+                               unsigned char *plaintext, size_t *plaintext_len,
+                               const unsigned char *iv, const unsigned char *tag) {
+    init_config_encryption_key();
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        return -1;
+    }
+
+    // Initialize decryption
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, config_enc_key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    int len;
+    size_t total_len = 0;
+
+    // Decrypt data
+    if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    total_len += len;
+
+    // Set expected tag
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, CONFIG_TAG_SIZE, (void*)tag) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    // Finalize decryption (verifies tag)
+    if (EVP_DecryptFinal_ex(ctx, plaintext + total_len, &len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        fprintf(stderr, "Error: Configuration file authentication failed (tampered or corrupted)\n");
+        return -1;
+    }
+    total_len += len;
+
+    *plaintext_len = total_len;
+    EVP_CIPHER_CTX_free(ctx);
+    return 0;
+}
+
 void hsm_config_init_defaults(HSMConfig *config) {
     memset(config, 0, sizeof(HSMConfig));
 
@@ -203,134 +340,165 @@ void hsm_config_init_defaults(HSMConfig *config) {
 }
 
 int hsm_config_load(HSMConfig *config, const char *filename) {
-    FILE *fp = fopen(filename, "r");
+    FILE *fp = fopen(filename, "rb");
     if (!fp) {
         fprintf(stderr, "Warning: Could not open config file %s, using defaults\n", filename);
         hsm_config_init_defaults(config);
         return -1;
     }
 
-    hsm_config_init_defaults(config);
-
-    char line[512];
-    int line_num = 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        line_num++;
-
-        // Skip comments and empty lines
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') {
-            continue;
-        }
-
-        // Parse key=value pairs
-        char key[128], value[256];
-        if (sscanf(line, "%127[^=]=%255[^\n]", key, value) == 2) {
-            // Trim whitespace
-            char *k = key;
-            while (*k == ' ' || *k == '\t') k++;
-
-            // Parse configuration values
-            if (strcmp(k, "key_rotation_days") == 0) {
-                config->key_rotation_days = atoi(value);
-            } else if (strcmp(k, "max_key_age_days") == 0) {
-                config->max_key_age_days = atoi(value);
-            } else if (strcmp(k, "rotation_enabled") == 0) {
-                config->rotation_enabled = atoi(value);
-            } else if (strcmp(k, "session_timeout_seconds") == 0) {
-                config->session_timeout_seconds = atoi(value);
-            } else if (strcmp(k, "max_concurrent_sessions") == 0) {
-                config->max_concurrent_sessions = atoi(value);
-            } else if (strcmp(k, "max_failed_auth_attempts") == 0) {
-                config->max_failed_auth_attempts = atoi(value);
-            } else if (strcmp(k, "lockout_duration_seconds") == 0) {
-                config->lockout_duration_seconds = atoi(value);
-            } else if (strcmp(k, "require_pin") == 0) {
-                config->require_pin = atoi(value);
-            } else if (strcmp(k, "password_min_length") == 0) {
-                config->password_min_length = atoi(value);
-            } else if (strcmp(k, "audit_log_file") == 0) {
-                strncpy(config->audit_log_file, value, sizeof(config->audit_log_file) - 1);
-            } else if (strcmp(k, "audit_enabled") == 0) {
-                config->audit_enabled = atoi(value);
-            } else if (strcmp(k, "audit_log_max_size_mb") == 0) {
-                config->audit_log_max_size_mb = atoi(value);
-            } else if (strcmp(k, "storage_path") == 0) {
-                strncpy(config->storage_path, value, sizeof(config->storage_path) - 1);
-            } else if (strcmp(k, "storage_encryption") == 0) {
-                config->storage_encryption = atoi(value);
-            } else if (strcmp(k, "backup_enabled") == 0) {
-                config->backup_enabled = atoi(value);
-            } else if (strcmp(k, "backup_interval_hours") == 0) {
-                config->backup_interval_hours = atoi(value);
-            } else if (strcmp(k, "backup_path") == 0) {
-                strncpy(config->backup_path, value, sizeof(config->backup_path) - 1);
-            } else if (strcmp(k, "fips_mode") == 0) {
-                config->fips_mode = atoi(value);
-            } else if (strcmp(k, "hardware_rng") == 0) {
-                config->hardware_rng = atoi(value);
-            } else if (strcmp(k, "secure_memory") == 0) {
-                config->secure_memory = atoi(value);
-            }
-        }
+    // Read magic number
+    char magic[CONFIG_MAGIC_SIZE];
+    if (fread(magic, 1, CONFIG_MAGIC_SIZE, fp) != CONFIG_MAGIC_SIZE ||
+        memcmp(magic, CONFIG_MAGIC, CONFIG_MAGIC_SIZE) != 0) {
+        fprintf(stderr, "Error: Invalid or corrupted config file (bad magic number)\n");
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
     }
 
+    // Read IV
+    unsigned char iv[CONFIG_IV_SIZE];
+    if (fread(iv, 1, CONFIG_IV_SIZE, fp) != CONFIG_IV_SIZE) {
+        fprintf(stderr, "Error: Failed to read IV from config file\n");
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    // Read tag
+    unsigned char tag[CONFIG_TAG_SIZE];
+    if (fread(tag, 1, CONFIG_TAG_SIZE, fp) != CONFIG_TAG_SIZE) {
+        fprintf(stderr, "Error: Failed to read tag from config file\n");
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    // Read encrypted data
+    fseek(fp, 0, SEEK_END);
+    long file_size = ftell(fp);
+    long ciphertext_len = file_size - CONFIG_MAGIC_SIZE - CONFIG_IV_SIZE - CONFIG_TAG_SIZE;
+    fseek(fp, CONFIG_MAGIC_SIZE + CONFIG_IV_SIZE + CONFIG_TAG_SIZE, SEEK_SET);
+
+    if (ciphertext_len <= 0 || ciphertext_len > 4096) {
+        fprintf(stderr, "Error: Invalid config file size\n");
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    unsigned char *ciphertext = malloc(ciphertext_len);
+    if (!ciphertext) {
+        fprintf(stderr, "Error: Out of memory\n");
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    if (fread(ciphertext, 1, ciphertext_len, fp) != (size_t)ciphertext_len) {
+        fprintf(stderr, "Error: Failed to read encrypted config data\n");
+        free(ciphertext);
+        fclose(fp);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
     fclose(fp);
+
+    // Decrypt configuration
+    unsigned char plaintext[sizeof(HSMConfig) + 16];
+    size_t plaintext_len = 0;
+
+    if (decrypt_config_data(ciphertext, ciphertext_len, plaintext, &plaintext_len,
+                            iv, tag) != 0) {
+        fprintf(stderr, "Error: Failed to decrypt config file\n");
+        free(ciphertext);
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    free(ciphertext);
+
+    // Validate decrypted size
+    if (plaintext_len != sizeof(HSMConfig)) {
+        fprintf(stderr, "Error: Decrypted config size mismatch (got %zu, expected %zu)\n",
+                plaintext_len, sizeof(HSMConfig));
+        hsm_config_init_defaults(config);
+        return -1;
+    }
+
+    // Copy decrypted config
+    memcpy(config, plaintext, sizeof(HSMConfig));
+
+    // Zero out plaintext
+    memset(plaintext, 0, sizeof(plaintext));
+
     return 0;
 }
 
 int hsm_config_save(const HSMConfig *config, const char *filename) {
-    FILE *fp = fopen(filename, "w");
+    if (!config || !filename) {
+        fprintf(stderr, "Error: Invalid parameters for config save\n");
+        return -1;
+    }
+
+    // Encrypt configuration data
+    unsigned char ciphertext[sizeof(HSMConfig) + 32];
+    size_t ciphertext_len = 0;
+    unsigned char iv[CONFIG_IV_SIZE];
+    unsigned char tag[CONFIG_TAG_SIZE];
+
+    if (encrypt_config_data((const unsigned char*)config, sizeof(HSMConfig),
+                            ciphertext, &ciphertext_len, iv, tag) != 0) {
+        fprintf(stderr, "Error: Failed to encrypt configuration\n");
+        return -1;
+    }
+
+    // Write encrypted file
+    FILE *fp = fopen(filename, "wb");
     if (!fp) {
         fprintf(stderr, "Error: Could not open config file %s for writing\n", filename);
         return -1;
     }
 
-    fprintf(fp, "# Virtual HSM Configuration File\n");
-    fprintf(fp, "# Generated: %s\n", ctime(&(time_t){time(NULL)}));
-    fprintf(fp, "\n");
+    // Write magic number
+    if (fwrite(CONFIG_MAGIC, 1, CONFIG_MAGIC_SIZE, fp) != CONFIG_MAGIC_SIZE) {
+        fprintf(stderr, "Error: Failed to write magic number\n");
+        fclose(fp);
+        return -1;
+    }
 
-    fprintf(fp, "# Key Rotation Settings\n");
-    fprintf(fp, "key_rotation_days=%d\n", config->key_rotation_days);
-    fprintf(fp, "max_key_age_days=%d\n", config->max_key_age_days);
-    fprintf(fp, "rotation_enabled=%d\n", config->rotation_enabled);
-    fprintf(fp, "\n");
+    // Write IV
+    if (fwrite(iv, 1, CONFIG_IV_SIZE, fp) != CONFIG_IV_SIZE) {
+        fprintf(stderr, "Error: Failed to write IV\n");
+        fclose(fp);
+        return -1;
+    }
 
-    fprintf(fp, "# Session Management\n");
-    fprintf(fp, "session_timeout_seconds=%d\n", config->session_timeout_seconds);
-    fprintf(fp, "max_concurrent_sessions=%d\n", config->max_concurrent_sessions);
-    fprintf(fp, "\n");
+    // Write tag
+    if (fwrite(tag, 1, CONFIG_TAG_SIZE, fp) != CONFIG_TAG_SIZE) {
+        fprintf(stderr, "Error: Failed to write tag\n");
+        fclose(fp);
+        return -1;
+    }
 
-    fprintf(fp, "# Security Settings\n");
-    fprintf(fp, "max_failed_auth_attempts=%d\n", config->max_failed_auth_attempts);
-    fprintf(fp, "lockout_duration_seconds=%d\n", config->lockout_duration_seconds);
-    fprintf(fp, "require_pin=%d\n", config->require_pin);
-    fprintf(fp, "password_min_length=%d\n", config->password_min_length);
-    fprintf(fp, "\n");
-
-    fprintf(fp, "# Audit Settings\n");
-    fprintf(fp, "audit_log_file=%s\n", config->audit_log_file);
-    fprintf(fp, "audit_enabled=%d\n", config->audit_enabled);
-    fprintf(fp, "audit_log_max_size_mb=%d\n", config->audit_log_max_size_mb);
-    fprintf(fp, "\n");
-
-    fprintf(fp, "# Storage Settings\n");
-    fprintf(fp, "storage_path=%s\n", config->storage_path);
-    fprintf(fp, "storage_encryption=%d\n", config->storage_encryption);
-    fprintf(fp, "\n");
-
-    fprintf(fp, "# Backup Settings\n");
-    fprintf(fp, "backup_enabled=%d\n", config->backup_enabled);
-    fprintf(fp, "backup_interval_hours=%d\n", config->backup_interval_hours);
-    fprintf(fp, "backup_path=%s\n", config->backup_path);
-    fprintf(fp, "\n");
-
-    fprintf(fp, "# Advanced Settings\n");
-    fprintf(fp, "fips_mode=%d\n", config->fips_mode);
-    fprintf(fp, "hardware_rng=%d\n", config->hardware_rng);
-    fprintf(fp, "secure_memory=%d\n", config->secure_memory);
+    // Write encrypted data
+    if (fwrite(ciphertext, 1, ciphertext_len, fp) != ciphertext_len) {
+        fprintf(stderr, "Error: Failed to write encrypted data\n");
+        fclose(fp);
+        return -1;
+    }
 
     fclose(fp);
+
+    // Set secure file permissions
+    chmod(filename, 0600);
+
+    // Zero out sensitive data
+    memset(ciphertext, 0, sizeof(ciphertext));
+    memset(iv, 0, sizeof(iv));
+    memset(tag, 0, sizeof(tag));
+
     return 0;
 }
 
