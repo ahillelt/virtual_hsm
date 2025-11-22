@@ -477,8 +477,15 @@ int main(int argc, char *argv[]) {
 
     } else if (strcmp(args.command, "-verify") == 0) {
         int result = handle_verify_command(&args);
-        write_audit_log(AUDIT_VERIFY_OPERATION, args.key_name, current_user_id,
-                       "Signature verified", result);
+        if (result) {
+            printf("Signature verified successfully\n");
+            write_audit_log(AUDIT_VERIFY_OPERATION, args.key_name, current_user_id,
+                           "Signature verified", 1);
+        } else {
+            fprintf(stderr, "Error: Signature verification failed\n");
+            write_audit_log(AUDIT_VERIFY_OPERATION, args.key_name, current_user_id,
+                           "Signature verification failed", 0);
+        }
         return result ? 0 : 1;
 
     } else if (strcmp(args.command, "-export_public_key") == 0) {
@@ -562,27 +569,38 @@ void handle_sign_command(const CommandLineArgs* args) {
 }
 
 int handle_verify_command(const CommandLineArgs* args) {
-    unsigned char data[BUFFER_SIZE];
+    unsigned char* data = NULL;
     unsigned char signature[SIG_LENGTH];
     size_t data_len = 0;
     size_t sig_len = 0;
+    int result = 0;
 
     if (args->use_stdin) {
-        data_len = fread(data, 1, BUFFER_SIZE - 1, stdin);
+        unsigned char buffer[BUFFER_SIZE];
+        data_len = fread(buffer, 1, BUFFER_SIZE - 1, stdin);
         if (data_len == 0) {
             fprintf(stderr, "Error: No data provided\n");
             return 0;
         }
 
+        data = (unsigned char*)malloc(data_len);
+        if (!data) {
+            fprintf(stderr, "Error: Memory allocation failed\n");
+            return 0;
+        }
+        memcpy(data, buffer, data_len);
+
         sig_len = fread(signature, 1, SIG_LENGTH, stdin);
         if (sig_len != SIG_LENGTH) {
             fprintf(stderr, "Error: Invalid signature\n");
+            free(data);
             return 0;
         }
     } else if (args->input_string) {
         data_len = strlen(args->input_string);
-        if (data_len >= BUFFER_SIZE) {
-            fprintf(stderr, "Error: Input too long\n");
+        data = (unsigned char*)malloc(data_len);
+        if (!data) {
+            fprintf(stderr, "Error: Memory allocation failed\n");
             return 0;
         }
         memcpy(data, args->input_string, data_len);
@@ -590,6 +608,7 @@ int handle_verify_command(const CommandLineArgs* args) {
         FILE *sig_file = fopen(args->signature_file, "rb");
         if (!sig_file) {
             fprintf(stderr, "Error: Cannot open signature file\n");
+            free(data);
             return 0;
         }
         sig_len = fread(signature, 1, SIG_LENGTH, sig_file);
@@ -597,20 +616,21 @@ int handle_verify_command(const CommandLineArgs* args) {
 
         if (sig_len != SIG_LENGTH) {
             fprintf(stderr, "Error: Invalid signature\n");
+            free(data);
             return 0;
         }
     } else if (args->input_file) {
-        FILE *data_file = fopen(args->input_file, "rb");
-        if (!data_file) {
+        // Use read_file() to read the entire file, like handle_sign_command() does
+        data = read_file(args->input_file, &data_len);
+        if (!data) {
             fprintf(stderr, "Error: Cannot open input file\n");
             return 0;
         }
-        data_len = fread(data, 1, BUFFER_SIZE - 1, data_file);
-        fclose(data_file);
 
         FILE *sig_file = fopen(args->signature_file, "rb");
         if (!sig_file) {
             fprintf(stderr, "Error: Cannot open signature file\n");
+            free(data);
             return 0;
         }
         sig_len = fread(signature, 1, SIG_LENGTH, sig_file);
@@ -618,15 +638,19 @@ int handle_verify_command(const CommandLineArgs* args) {
 
         if (sig_len != SIG_LENGTH) {
             fprintf(stderr, "Error: Invalid signature\n");
+            free(data);
             return 0;
         }
     }
 
     if (data_len > 0 && sig_len == SIG_LENGTH) {
-        return verify_signature(args->key_name, data, data_len, signature, sig_len);
+        result = verify_signature(args->key_name, data, data_len, signature, sig_len);
     }
 
-    return 0;
+    if (data) {
+        free(data);
+    }
+    return result;
 }
 
 void handle_export_public_key_command(const char* key_name) {
