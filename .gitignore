@@ -35,3 +35,12 @@ server.key
 # Storage
 vhsm_storage/
 *.dat
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.so
