@@ -15,6 +15,7 @@ A comprehensive, feature-rich virtual Hardware Security Module implementation pr
   - [CLI Usage](#cli-usage)
   - [Enhanced HSM](#enhanced-hsm)
   - [REST API Server](#rest-api-server)
+  - [Python API](#python-api)
 - [Key Management](#key-management)
 - [Digital Signatures](#digital-signatures)
 - [File Storage](#file-storage)
@@ -35,7 +36,7 @@ This Virtual HSM provides enterprise-grade cryptographic key management and secu
 - Audit logging for compliance
 - Secure file storage with encryption
 - Digital signature operations (ED25519)
-- Multiple access interfaces (Library API, CLI, REST API)
+- Multiple access interfaces (Library API, CLI, REST API, Python API)
 
 **⚠️ Important:** This is a virtualized HSM for educational and development purposes. For production systems, use hardware-backed HSMs or cloud HSM services.
 
@@ -77,6 +78,7 @@ This Virtual HSM provides enterprise-grade cryptographic key management and secu
 
 ### 🌐 Multiple Interfaces
 - **Library API**: Clean C API for programmatic access
+- **Python API**: Complete Python bindings using ctypes
 - **CLI Tool**: Command-line interface for scripting
 - **Enhanced CLI**: Interactive mode with extended features
 - **REST API Server**: JSON HTTP API for remote access
@@ -98,6 +100,7 @@ virtual_hsm/
 │   └── utils/           # Secure memory utilities
 ├── cli/                 # Command-line interface
 ├── server/              # REST API servers
+├── python/              # Python API bindings
 ├── examples/            # Example applications
 ├── tests/               # Test suites
 ├── lib/                 # Built libraries (output)
@@ -350,6 +353,72 @@ curl -X POST http://localhost:8443/api/user/create \
 curl -X POST http://localhost:8443/api/session/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"pass123"}'
+```
+
+### Python API
+
+The Virtual HSM provides a complete Python library for easy integration with Python applications.
+
+**Installation:**
+
+```bash
+# Build the C library first
+make lib
+
+# Install Python package
+cd python
+pip install -e .
+```
+
+**Quick Example:**
+
+```python
+import vhsm
+
+# Initialize HSM
+hsm = vhsm.HSM('/tmp/hsm_storage')
+hsm.generate_master_key()
+
+# Create admin user
+hsm.create_user('admin', 'password123', role=vhsm.ROLE_ADMIN)
+
+# Login and use HSM
+with hsm.login('admin', 'password123') as session:
+    # Generate encryption key
+    key_handle = session.generate_key('my_key', vhsm.KEY_TYPE_AES_256)
+
+    # Encrypt data
+    ciphertext, iv = session.encrypt(key_handle, b'secret data')
+
+    # Decrypt data
+    plaintext = session.decrypt(key_handle, ciphertext, iv)
+    print(plaintext)  # b'secret data'
+
+    # Generate signing key
+    sign_key = session.generate_key('sign_key', vhsm.KEY_TYPE_ED25519)
+
+    # Sign document
+    signature = session.sign(sign_key, b'Important document')
+
+    # Verify signature
+    is_valid = session.verify(sign_key, b'Important document', signature)
+```
+
+**Features:**
+- Pure Python interface using ctypes (no compilation required)
+- Context managers for automatic session cleanup
+- Full error handling with descriptive exceptions
+- Support for all HSM operations (encryption, signatures, key management)
+
+**Documentation:**
+- Full API reference: `python/README.md`
+- Complete example: `examples/python/hsm_example.py`
+
+**Run the example:**
+
+```bash
+cd examples/python
+python hsm_example.py
 ```
 
 ## Key Management
