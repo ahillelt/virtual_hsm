@@ -6,6 +6,7 @@ lib/
 # Test binaries (built locally)
 virtual_hsm
 hsm_enhanced_test
+hsm_enhanced_check
 passkey_tool
 
 # Test artifacts
