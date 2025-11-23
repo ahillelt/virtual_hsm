@@ -123,12 +123,12 @@ int decrypt_key_in_memory(unsigned char *encrypted_key, size_t key_len);
 
 // Implementation
 
-// Static audit encryption key
-static unsigned char audit_enc_key[32] = {0};
-static int audit_enc_key_initialized = 0;
+// Audit encryption key (exported for audit log decryption)
+unsigned char audit_enc_key[32] = {0};
+int audit_enc_key_initialized = 0;
 
-// Initialize audit encryption key
-static void init_audit_encryption_key(void) {
+// Initialize audit encryption key (exported for audit log decryption)
+void init_audit_encryption_key(void) {
     if (audit_enc_key_initialized) {
         return;
     }

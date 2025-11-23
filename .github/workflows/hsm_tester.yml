@@ -164,8 +164,10 @@ jobs:
 
     - name: Verify audit log
       run: |
-        grep "KEY_CREATED" hsm_audit.log || exit 1
-        grep "SIGN_OPERATION" hsm_audit.log || exit 1
+        # Audit log is encrypted - use the -audit_logs command to read it
+        ./hsm_enhanced -audit_logs 365 > audit_output.txt
+        grep "KEY_CREATED" audit_output.txt || exit 1
+        grep "SIGN_OPERATION" audit_output.txt || exit 1
         echo "✓ Audit log contains expected entries"
 
     - name: Test enhanced commands

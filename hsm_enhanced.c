@@ -221,33 +221,154 @@ int handle_key_info_command(const char* key_name) {
 }
 
 // Display audit logs
+// Decrypt audit entry (helper for reading encrypted logs)
+static int decrypt_audit_entry_helper(const unsigned char *ciphertext, size_t ciphertext_len,
+                                      AuditLogEntry *entry, const unsigned char *iv,
+                                      const unsigned char *tag) {
+    // Reuse the key initialization from hsm_security.h
+    extern unsigned char audit_enc_key[32];
+    extern int audit_enc_key_initialized;
+    extern void init_audit_encryption_key(void);
+
+    init_audit_encryption_key();
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return -1;
+
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, audit_enc_key, iv) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    int len;
+    size_t total_len = 0;
+    unsigned char plaintext[sizeof(AuditLogEntry) + 16];
+
+    if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    total_len += len;
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void*)tag) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (EVP_DecryptFinal_ex(ctx, plaintext + total_len, &len) != 1) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    total_len += len;
+
+    if (total_len != sizeof(AuditLogEntry)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    memcpy(entry, plaintext, sizeof(AuditLogEntry));
+    memset(plaintext, 0, sizeof(plaintext));
+
+    EVP_CIPHER_CTX_free(ctx);
+    return 0;
+}
+
 int handle_list_audit_logs_command(time_t start_time, time_t end_time) {
-    FILE *log = fopen(AUDIT_LOG_FILE, "r");
+    FILE *log = fopen(AUDIT_LOG_FILE, "rb");
     if (!log) {
         fprintf(stderr, "Error: Cannot open audit log\n");
         return 0;
     }
 
-    printf("\n=== Audit Log ===\n");
+    // Read and verify magic header
+    char magic[8];
+    if (fread(magic, 1, 8, log) != 8) {
+        fprintf(stderr, "Error: Cannot read audit log header\n");
+        fclose(log);
+        return 0;
+    }
+
+    // Check if encrypted format
+    int is_encrypted = (memcmp(magic, "VHSMAUD1", 8) == 0);
+
+    printf("\n=== Audit Log (%s) ===\n", is_encrypted ? "Encrypted" : "Plain Text");
     printf("From: %s", ctime(&start_time));
     printf("To:   %s\n", ctime(&end_time));
 
-    char line[512];
+    const char *event_names[] = {
+        "KEY_CREATED", "KEY_ACCESSED", "KEY_MODIFIED", "KEY_DELETED",
+        "KEY_ROTATED", "AUTH_SUCCESS", "AUTH_FAILURE", "SIGN_OPERATION",
+        "VERIFY_OPERATION", "ENCRYPTION", "DECRYPTION", "CONFIG_CHANGE",
+        "SECURITY_VIOLATION"
+    };
+
     int count = 0;
 
-    while (fgets(line, sizeof(line), log)) {
-        // Skip comments
-        if (line[0] == '#') continue;
+    if (is_encrypted) {
+        // Read encrypted entries
+        while (!feof(log)) {
+            unsigned char iv[12];
+            unsigned char tag[16];
 
-        // Parse timestamp
-        struct tm tm_info;
-        char timestamp_str[64];
-        if (sscanf(line, "%63[^|]", timestamp_str) == 1) {
-            if (strptime(timestamp_str, "%Y-%m-%d %H:%M:%S", &tm_info)) {
-                time_t entry_time = mktime(&tm_info);
-                if (entry_time >= start_time && entry_time <= end_time) {
-                    printf("%s", line);
+            // Read IV
+            if (fread(iv, 1, 12, log) != 12) {
+                if (feof(log)) break;
+                fprintf(stderr, "Error reading IV\n");
+                break;
+            }
+
+            // Read tag
+            if (fread(tag, 1, 16, log) != 16) {
+                fprintf(stderr, "Error reading tag\n");
+                break;
+            }
+
+            // Read encrypted entry (GCM mode: ciphertext size == plaintext size)
+            unsigned char ciphertext[sizeof(AuditLogEntry)];
+            size_t ciphertext_len = fread(ciphertext, 1, sizeof(AuditLogEntry), log);
+            if (ciphertext_len != sizeof(AuditLogEntry)) {
+                if (feof(log)) break;
+                fprintf(stderr, "Error: Incomplete encrypted entry (got %zu, expected %zu)\n",
+                        ciphertext_len, sizeof(AuditLogEntry));
+                break;
+            }
+
+            // Decrypt entry
+            AuditLogEntry entry;
+            if (decrypt_audit_entry_helper(ciphertext, ciphertext_len, &entry, iv, tag) == 0) {
+                // Filter by time
+                if (entry.timestamp >= start_time && entry.timestamp <= end_time) {
+                    struct tm *tm_info = localtime(&entry.timestamp);
+                    char timestamp[64];
+                    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+                    printf("%s|%s|%s|%s|%s|%s\n",
+                           timestamp,
+                           event_names[entry.event_type],
+                           entry.key_name,
+                           entry.user_id,
+                           entry.details,
+                           entry.success ? "SUCCESS" : "FAILURE");
                     count++;
+                }
+            }
+        }
+    } else {
+        // Old plain text format - rewind and read as text
+        rewind(log);
+        char line[512];
+        while (fgets(line, sizeof(line), log)) {
+            if (line[0] == '#') continue;
+
+            struct tm tm_info;
+            char timestamp_str[64];
+            if (sscanf(line, "%63[^|]", timestamp_str) == 1) {
+                if (strptime(timestamp_str, "%Y-%m-%d %H:%M:%S", &tm_info)) {
+                    time_t entry_time = mktime(&tm_info);
+                    if (entry_time >= start_time && entry_time <= end_time) {
+                        printf("%s", line);
+                        count++;
+                    }
                 }
             }
         }
