@@ -60,10 +60,9 @@ vhsm_error_t vhsm_encrypt(vhsm_session_t session, vhsm_key_handle_t handle,
     vhsm_error_t err = decrypt_stored_key(storage, handle, key_material,
                                            &key_material_len, &key_type);
     if (err != VHSM_SUCCESS) {
-        /* For demonstration, use a test key if storage integration incomplete */
-        memset(key_material, 0xAA, 32);
-        key_material_len = 32;
-        key_type = VHSM_KEY_TYPE_AES_256;
+        /* SECURITY: Do not fallback to test keys in production */
+        secure_wipe(key_material, sizeof(key_material));
+        return VHSM_ERROR_KEY_NOT_FOUND;
     }
 
     /* Verify key type is suitable for encryption */
@@ -172,10 +171,9 @@ vhsm_error_t vhsm_decrypt(vhsm_session_t session, vhsm_key_handle_t handle,
     vhsm_error_t err = decrypt_stored_key(storage, handle, key_material,
                                            &key_material_len, &key_type);
     if (err != VHSM_SUCCESS) {
-        /* For demonstration, use test key */
-        memset(key_material, 0xAA, 32);
-        key_material_len = 32;
-        key_type = VHSM_KEY_TYPE_AES_256;
+        /* SECURITY: Do not fallback to test keys in production */
+        secure_wipe(key_material, sizeof(key_material));
+        return VHSM_ERROR_KEY_NOT_FOUND;
     }
 
     if (key_type != VHSM_KEY_TYPE_AES_128 && key_type != VHSM_KEY_TYPE_AES_256) {
@@ -275,10 +273,9 @@ vhsm_error_t vhsm_sign(vhsm_session_t session, vhsm_key_handle_t handle,
     vhsm_error_t err = decrypt_stored_key(storage, handle, key_material,
                                            &key_material_len, &key_type);
     if (err != VHSM_SUCCESS) {
-        /* Use test key for demonstration */
-        RAND_bytes(key_material, 32);
-        key_material_len = 32;
-        key_type = VHSM_KEY_TYPE_ED25519;
+        /* SECURITY: Do not fallback to test keys in production */
+        secure_wipe(key_material, sizeof(key_material));
+        return VHSM_ERROR_KEY_NOT_FOUND;
     }
 
     if (key_type != VHSM_KEY_TYPE_ED25519) {
@@ -390,10 +387,9 @@ vhsm_error_t vhsm_hmac(vhsm_session_t session, vhsm_key_handle_t handle,
     vhsm_error_t err = decrypt_stored_key(storage, handle, key_material,
                                            &key_material_len, &key_type);
     if (err != VHSM_SUCCESS) {
-        /* Use test key */
-        memset(key_material, 0xBB, 64);
-        key_material_len = 64;
-        key_type = VHSM_KEY_TYPE_HMAC_SHA256;
+        /* SECURITY: Do not fallback to test keys in production */
+        secure_wipe(key_material, sizeof(key_material));
+        return VHSM_ERROR_KEY_NOT_FOUND;
     }
 
     if (key_type != VHSM_KEY_TYPE_HMAC_SHA256 && key_type != VHSM_KEY_TYPE_HMAC_SHA512) {

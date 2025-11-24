@@ -16,6 +16,7 @@ A comprehensive, feature-rich virtual Hardware Security Module implementation pr
   - [Enhanced HSM](#enhanced-hsm)
   - [REST API Server](#rest-api-server)
   - [Python API](#python-api)
+- [Docker & Kubernetes](#docker--kubernetes)
 - [Key Management](#key-management)
 - [Digital Signatures](#digital-signatures)
 - [File Storage](#file-storage)
@@ -625,6 +626,30 @@ jobs:
 
 Add this value to your repository secrets as `MASTER_KEY`.
 
+## Docker & Kubernetes
+
+Full Docker and Kubernetes support with production-ready configurations and multiple secrets management solutions.
+
+See [k8s/README.md](k8s/README.md) for comprehensive Kubernetes documentation including HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, and Google Secret Manager integration.
+
+### Quick Start - Docker
+
+```bash
+# Build and run
+docker build -t virtual-hsm .
+docker run -d -p 8443:8443 virtual-hsm
+
+# Or use docker-compose
+docker-compose up -d
+```
+
+### Quick Start - Kubernetes (Minikube)
+
+```bash
+cd k8s
+./minikube-setup.sh
+```
+
 ## Building from Source
 
 ### Quick Build (All Platforms)
@@ -909,5 +934,26 @@ This project is for educational and development purposes. See individual source 
 - **Current Version**: 2.0.0
 - **API Version**: 2.0
 - **Protocol Version**: 2.0
+
+### What's New in 2.0.0 (November 2024)
+
+**Security Enhancements:**
+- Fixed 6 critical vulnerabilities
+- Fixed 20 high severity issues
+- Enhanced cryptographic key derivation (PBKDF2 with 100k iterations)
+- Secure random session IDs (no more predictable IDs)
+- Strengthened TLS configuration
+- Fixed CORS vulnerability
+- Removed test key fallbacks
+
+**New Features:**
+- Docker support with security hardening
+- Kubernetes deployment manifests
+- Multiple secrets management solutions (Vault, AWS, Azure, GCP)
+- Minikube integration
+- Docker Compose configuration
+- Comprehensive security documentation
+
+See [SECURITY.md](SECURITY.md) for detailed security information.
 
 For version history and changelog, see commit history on GitHub.

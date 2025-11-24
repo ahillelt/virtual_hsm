@@ -1,0 +1,52 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+build/
+lib/
+bin/
+
+# Test files
+tests/test_*
+test_output/
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets and keys
+*.key
+*.pem
+*.crt
+master.key
+keystore.dat
+users.dat
+*.metadata
+.vhsm_*
+
+# Logs
+*.log
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Release packages
+release/
+release_package/

@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  vhsm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vhsm-server
+    ports:
+      - "8443:8443"
+    volumes:
+      # Persistent storage for HSM data
+      - vhsm-storage:/app/storage
+      # Persistent certificates
+      - vhsm-certs:/app/certs
+      # Logs
+      - vhsm-logs:/app/logs
+    environment:
+      # Use Docker secrets for sensitive configuration
+      - VHSM_ALLOWED_ORIGIN=${VHSM_ALLOWED_ORIGIN:-https://localhost:3000}
+      - VHSM_MASTER_KEY_FILE=/run/secrets/vhsm_master_key
+      - VHSM_AUDIT_ENABLED=1
+      - VHSM_SESSION_TIMEOUT=3600
+      - VHSM_MAX_FAILED_AUTH=3
+    secrets:
+      - vhsm_master_key
+      - vhsm_admin_password
+    networks:
+      - vhsm-network
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=10M
+
+  # Optional: Vault for secrets management
+  vault:
+    image: hashicorp/vault:latest
+    container_name: vhsm-vault
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_ROOT_TOKEN:-dev-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - vhsm-network
+    restart: unless-stopped
+
+volumes:
+  vhsm-storage:
+    driver: local
+  vhsm-certs:
+    driver: local
+  vhsm-logs:
+    driver: local
+
+networks:
+  vhsm-network:
+    driver: bridge
+
+secrets:
+  vhsm_master_key:
+    file: ./secrets/master_key.txt
+  vhsm_admin_password:
+    file: ./secrets/admin_password.txt

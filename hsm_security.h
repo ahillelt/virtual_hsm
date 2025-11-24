@@ -133,11 +133,44 @@ void init_audit_encryption_key(void) {
         return;
     }
 
-    // Derive key from system-specific salt
-    const char *salt = "VHSM_AUDIT_SALT_V1";
-    unsigned char temp[SHA256_DIGEST_LENGTH];
-    SHA256((const unsigned char*)salt, strlen(salt), temp);
-    memcpy(audit_enc_key, temp, 32);
+    // Derive key using PBKDF2 with proper random salt
+    // Read salt from secure location or generate if not exists
+    unsigned char salt[32];
+    const char *salt_file = ".vhsm_audit_salt";
+    FILE *sf = fopen(salt_file, "rb");
+
+    if (sf) {
+        if (fread(salt, 1, sizeof(salt), sf) != sizeof(salt)) {
+            fprintf(stderr, "Warning: Failed to read audit salt, generating new\n");
+            if (RAND_bytes(salt, sizeof(salt)) != 1) {
+                fprintf(stderr, "FATAL: Cannot generate random salt\n");
+                exit(1);
+            }
+        }
+        fclose(sf);
+    } else {
+        // Generate new random salt
+        if (RAND_bytes(salt, sizeof(salt)) != 1) {
+            fprintf(stderr, "FATAL: Cannot generate random salt\n");
+            exit(1);
+        }
+
+        // Save salt for future use
+        sf = fopen(salt_file, "wb");
+        if (sf) {
+            fwrite(salt, 1, sizeof(salt), sf);
+            fclose(sf);
+            chmod(salt_file, 0600);
+        }
+    }
+
+    // Use PBKDF2 with high iteration count
+    const char *password = "VHSM_AUDIT_KEY_V2";
+    PKCS5_PBKDF2_HMAC(password, strlen(password),
+                      salt, sizeof(salt),
+                      100000,  // 100k iterations
+                      EVP_sha256(),
+                      32, audit_enc_key);
 
     audit_enc_key_initialized = 1;
 }
@@ -196,10 +229,43 @@ static void init_metadata_encryption_key(void) {
         return;
     }
 
-    const char *salt = "VHSM_METADATA_SALT_V1";
-    unsigned char temp[SHA256_DIGEST_LENGTH];
-    SHA256((const unsigned char*)salt, strlen(salt), temp);
-    memcpy(metadata_enc_key, temp, 32);
+    // Derive key using PBKDF2 with proper random salt
+    unsigned char salt[32];
+    const char *salt_file = ".vhsm_metadata_salt";
+    FILE *sf = fopen(salt_file, "rb");
+
+    if (sf) {
+        if (fread(salt, 1, sizeof(salt), sf) != sizeof(salt)) {
+            fprintf(stderr, "Warning: Failed to read metadata salt, generating new\n");
+            if (RAND_bytes(salt, sizeof(salt)) != 1) {
+                fprintf(stderr, "FATAL: Cannot generate random salt\n");
+                exit(1);
+            }
+        }
+        fclose(sf);
+    } else {
+        // Generate new random salt
+        if (RAND_bytes(salt, sizeof(salt)) != 1) {
+            fprintf(stderr, "FATAL: Cannot generate random salt\n");
+            exit(1);
+        }
+
+        // Save salt for future use
+        sf = fopen(salt_file, "wb");
+        if (sf) {
+            fwrite(salt, 1, sizeof(salt), sf);
+            fclose(sf);
+            chmod(salt_file, 0600);
+        }
+    }
+
+    // Use PBKDF2 with high iteration count
+    const char *password = "VHSM_METADATA_KEY_V2";
+    PKCS5_PBKDF2_HMAC(password, strlen(password),
+                      salt, sizeof(salt),
+                      100000,  // 100k iterations
+                      EVP_sha256(),
+                      32, metadata_enc_key);
 
     metadata_enc_key_initialized = 1;
 }
@@ -322,14 +388,16 @@ int write_audit_log(AuditEventType event_type, const char *key_name,
         strncpy(entry.key_name, key_name, sizeof(entry.key_name) - 1);
         entry.key_name[sizeof(entry.key_name) - 1] = '\0';
     } else {
-        strcpy(entry.key_name, "N/A");
+        strncpy(entry.key_name, "N/A", sizeof(entry.key_name) - 1);
+        entry.key_name[sizeof(entry.key_name) - 1] = '\0';
     }
 
     if (user_id) {
         strncpy(entry.user_id, user_id, sizeof(entry.user_id) - 1);
         entry.user_id[sizeof(entry.user_id) - 1] = '\0';
     } else {
-        strcpy(entry.user_id, "system");
+        strncpy(entry.user_id, "system", sizeof(entry.user_id) - 1);
+        entry.user_id[sizeof(entry.user_id) - 1] = '\0';
     }
 
     if (details) {

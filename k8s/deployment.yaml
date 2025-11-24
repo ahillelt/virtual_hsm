@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vhsm-server
+  namespace: vhsm
+  labels:
+    app: vhsm
+    component: server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vhsm
+      component: server
+  template:
+    metadata:
+      labels:
+        app: vhsm
+        component: server
+    spec:
+      serviceAccountName: vhsm-service-account
+
+      # Security context for pod
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: vhsm
+        image: virtual-hsm:latest
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+
+        # Environment variables
+        env:
+        - name: VHSM_ALLOWED_ORIGIN
+          valueFrom:
+            configMapKeyRef:
+              name: vhsm-config
+              key: allowed_origin
+        - name: VHSM_SESSION_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: vhsm-config
+              key: session_timeout
+        - name: VHSM_MASTER_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vhsm-secrets
+              key: master-key
+        - name: VHSM_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vhsm-secrets
+              key: admin-password
+
+        # Volume mounts
+        volumeMounts:
+        - name: storage
+          mountPath: /app/storage
+        - name: certs
+          mountPath: /app/certs
+        - name: logs
+          mountPath: /app/logs
+        - name: tmp
+          mountPath: /tmp
+
+        # Resource limits
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+        # Liveness probe
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness probe
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+      volumes:
+      - name: storage
+        persistentVolumeClaim:
+          claimName: vhsm-storage-pvc
+      - name: certs
+        persistentVolumeClaim:
+          claimName: vhsm-certs-pvc
+      - name: logs
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+
+      # Node affinity for security
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - vhsm
+              topologyKey: kubernetes.io/hostname

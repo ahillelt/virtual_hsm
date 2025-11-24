@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vhsm-config
+  namespace: vhsm
+  labels:
+    app: vhsm
+data:
+  allowed_origin: "https://example.com"
+  session_timeout: "3600"
+  max_failed_auth: "3"
+  audit_enabled: "1"
+  key_rotation_days: "90"
+  max_key_age_days: "365"
