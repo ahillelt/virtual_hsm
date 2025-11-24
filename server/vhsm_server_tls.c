@@ -12,6 +12,7 @@
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+#include <openssl/rand.h>
 
 /* TLS-enabled HTTP server for REST API */
 
@@ -128,6 +129,11 @@ static SSL_CTX* init_ssl_context(const char* cert_file, const char* key_file) {
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
 
+    /* SECURITY: Set strong cipher suite */
+    if (SSL_CTX_set_cipher_list(ctx, "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256") != 1) {
+        fprintf(stderr, "Warning: Failed to set cipher list\n");
+    }
+
     /* Load certificate */
     if (SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_print_errors_fp(stderr);
@@ -237,9 +243,10 @@ void handle_ssl_request(SSL* ssl) {
                     snprintf(content, sizeof(content),
                              "{\"success\":true,\"username\":\"%s\"}", username);
                 } else {
+                    /* SECURITY: Don't expose internal error details */
                     status_code = 500;
                     snprintf(content, sizeof(content),
-                             "{\"error\":\"%s\"}", vhsm_error_string(err));
+                             "{\"error\":\"Internal server error\"}");
                 }
             }
         }
@@ -260,12 +267,20 @@ void handle_ssl_request(SSL* ssl) {
                 vhsm_error_t err = vhsm_session_login(global_ctx, &session,
                                                        username, password, NULL);
                 if (err == VHSM_SUCCESS) {
+                    /* SECURITY: Generate secure random session ID instead of pointer */
+                    uint8_t session_id_bytes[16];
+                    RAND_bytes(session_id_bytes, sizeof(session_id_bytes));
+                    char session_id_hex[33];
+                    for (int i = 0; i < 16; i++) {
+                        snprintf(session_id_hex + i*2, 3, "%02x", session_id_bytes[i]);
+                    }
                     snprintf(content, sizeof(content),
-                             "{\"success\":true,\"session_id\":\"%p\"}", (void*)session);
+                             "{\"success\":true,\"session_id\":\"%s\"}", session_id_hex);
                 } else {
+                    /* SECURITY: Generic auth error message */
                     status_code = 401;
                     snprintf(content, sizeof(content),
-                             "{\"error\":\"%s\"}", vhsm_error_string(err));
+                             "{\"error\":\"Authentication failed\"}");
                 }
             }
         }
@@ -282,17 +297,25 @@ void handle_ssl_request(SSL* ssl) {
     else if (status_code == 404) status_text = "Not Found";
     else if (status_code == 500) status_text = "Internal Server Error";
 
+    /* SECURITY: Enhanced security headers */
+    const char* allowed_origin = getenv("VHSM_ALLOWED_ORIGIN");
+    if (!allowed_origin) {
+        allowed_origin = "https://localhost:3000";  /* Default for development */
+    }
+
     snprintf(response, sizeof(response),
              "HTTP/1.1 %d %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
-             "Strict-Transport-Security: max-age=31536000\r\n"
+             "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload\r\n"
              "X-Content-Type-Options: nosniff\r\n"
              "X-Frame-Options: DENY\r\n"
+             "Content-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n"
+             "Access-Control-Allow-Origin: %s\r\n"
              "Connection: close\r\n"
              "\r\n"
              "%s",
-             status_code, status_text, strlen(content), content);
+             status_code, status_text, strlen(content), allowed_origin, content);
 
     SSL_write(ssl, response, strlen(response));
 }
@@ -333,7 +356,14 @@ int main(int argc, char* argv[]) {
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
-            if (i + 1 < argc) port = atoi(argv[++i]);
+            if (i + 1 < argc) {
+                port = atoi(argv[++i]);
+                /* SECURITY: Validate port range */
+                if (port < 1 || port > 65535) {
+                    fprintf(stderr, "Error: Port must be between 1 and 65535\n");
+                    return 1;
+                }
+            }
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--storage") == 0) {
             if (i + 1 < argc) storage_path = argv[++i];
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--cert") == 0) {

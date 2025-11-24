@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <openssl/rand.h>
 
 /* Simple HTTP server for REST API */
 
@@ -114,9 +115,10 @@ void handle_request(int client_sock) {
                     snprintf(content, sizeof(content),
                              "{\"success\":true,\"username\":\"%s\"}", username);
                 } else {
+                    /* SECURITY: Don't expose internal error details */
                     status_code = 500;
                     snprintf(content, sizeof(content),
-                             "{\"error\":\"%s\"}", vhsm_error_string(err));
+                             "{\"error\":\"Internal server error\"}");
                 }
             }
         }
@@ -139,12 +141,20 @@ void handle_request(int client_sock) {
                 vhsm_error_t err = vhsm_session_login(global_ctx, &session,
                                                        username, password, NULL);
                 if (err == VHSM_SUCCESS) {
+                    /* SECURITY: Generate secure random session ID instead of pointer */
+                    uint8_t session_id_bytes[16];
+                    RAND_bytes(session_id_bytes, sizeof(session_id_bytes));
+                    char session_id_hex[33];
+                    for (int i = 0; i < 16; i++) {
+                        snprintf(session_id_hex + i*2, 3, "%02x", session_id_bytes[i]);
+                    }
                     snprintf(content, sizeof(content),
-                             "{\"success\":true,\"session_id\":\"%p\"}", (void*)session);
+                             "{\"success\":true,\"session_id\":\"%s\"}", session_id_hex);
                 } else {
+                    /* SECURITY: Generic auth error message */
                     status_code = 401;
                     snprintf(content, sizeof(content),
-                             "{\"error\":\"%s\"}", vhsm_error_string(err));
+                             "{\"error\":\"Authentication failed\"}");
                 }
             }
         }
@@ -168,15 +178,24 @@ void handle_request(int client_sock) {
     else if (status_code == 500) status_text = "Internal Server Error";
     else if (status_code == 501) status_text = "Not Implemented";
 
+    /* SECURITY: Restrict CORS - configure allowed origins via environment variable */
+    const char* allowed_origin = getenv("VHSM_ALLOWED_ORIGIN");
+    if (!allowed_origin) {
+        allowed_origin = "http://localhost:3000";  /* Default for development */
+    }
+
     snprintf(response, sizeof(response),
              "HTTP/1.1 %d %s\r\n"
              "Content-Type: application/json\r\n"
              "Content-Length: %zu\r\n"
-             "Access-Control-Allow-Origin: *\r\n"
+             "Access-Control-Allow-Origin: %s\r\n"
+             "X-Content-Type-Options: nosniff\r\n"
+             "X-Frame-Options: DENY\r\n"
+             "Content-Security-Policy: default-src 'none'\r\n"
              "Connection: close\r\n"
              "\r\n"
              "%s",
-             status_code, status_text, strlen(content), content);
+             status_code, status_text, strlen(content), allowed_origin, content);
 
     send(client_sock, response, strlen(response), 0);
     close(client_sock);
@@ -201,6 +220,11 @@ int main(int argc, char* argv[]) {
         if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
             if (i + 1 < argc) {
                 port = atoi(argv[++i]);
+                /* SECURITY: Validate port range */
+                if (port < 1 || port > 65535) {
+                    fprintf(stderr, "Error: Port must be between 1 and 65535\n");
+                    return 1;
+                }
             }
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--storage") == 0) {
             if (i + 1 < argc) {

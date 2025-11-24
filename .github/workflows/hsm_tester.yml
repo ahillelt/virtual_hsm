@@ -13,9 +13,11 @@ permissions:
   pull-requests: write
   
 env:
-  SECRETS_TEST: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  ACTION_KEY: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  APP_SEC_KEY: "9876543210fedcba9876543210fedcba0123456789abcdef0123456789abcdef"
+  # SECURITY: Use GitHub Secrets for sensitive values in production
+  # These are example values for CI/CD testing only - DO NOT use in production
+  SECRETS_TEST: ${{ secrets.SECRETS_TEST || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }}
+  ACTION_KEY: ${{ secrets.ACTION_KEY || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' }}
+  APP_SEC_KEY: ${{ secrets.APP_SEC_KEY || '9876543210fedcba9876543210fedcba0123456789abcdef0123456789abcdef' }}
 
 jobs:
   build-and-test:
